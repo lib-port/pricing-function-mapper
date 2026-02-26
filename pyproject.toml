@@ -1,0 +1,57 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pricing-function-mapper"
+version = "0.1.0"
+description = "Active-learning mapper for comprehensive car pricing functions"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "numpy==2.4.2",
+  "pandas==3.0.1",
+  "scikit-learn==1.8.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.2.0",
+  "black>=24.8.0",
+  "ruff>=0.6.8",
+  "mypy>=1.11.0",
+  "pre-commit>=3.8.0",
+]
+
+[project.scripts]
+pricing-mapper = "pricing_mapper.cli:run_cli"
+
+[tool.setuptools]
+packages = ["pricing_mapper"]
+
+[tool.black]
+line-length = 100
+exclude = '''
+/(
+    \.venv
+  | \.git
+  | pricing_function_mapper\.egg-info
+)/
+'''
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+exclude = [".venv", ".git", "pricing_function_mapper.egg-info"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.mypy]
+python_version = "3.11"
+ignore_missing_imports = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+check_untyped_defs = true
+no_implicit_optional = true
+exclude = "(^\\.venv/|pricing_function_mapper\\.egg-info/)"
