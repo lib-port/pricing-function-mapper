@@ -239,13 +239,25 @@ Serialized inference artifact containing:
 
 ## Quality and Testing
 
-Lint, type-check, tests:
+Run all local quality checks:
+
+```bash
+./scripts/quality.sh
+```
+
+Equivalent manual commands:
 
 ```bash
 ruff check pricing_mapper tests comp_car_active_mapper_advanced.py
 black --check pricing_mapper tests comp_car_active_mapper_advanced.py
 mypy pricing_mapper
 python -m pytest -q
+```
+
+Run a quick local smoke execution:
+
+```bash
+./scripts/smoke.sh
 ```
 
 ## Running in a Debian Vagrant VM
