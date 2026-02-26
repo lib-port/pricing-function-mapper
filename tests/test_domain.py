@@ -49,6 +49,34 @@ class DomainTests(unittest.TestCase):
         self.assertEqual((i.low, i.high), (100, 3000))
         self.assertEqual(k.levels, ["private", "business"])
 
+    def test_canonicalize_respects_domain_overrides(self) -> None:
+        domain = build_comp_car_domain(
+            {
+                "continuous": {"vehicle_value": {"low": 5000, "high": 100000}},
+                "integers": {"excess": {"low": 100, "high": 3000}},
+            }
+        )
+        row = {
+            "driver_age": 30,
+            "years_licensed": 10,
+            "vehicle_year": 2020,
+            "vehicle_value": 1,
+            "annual_km": 20000,
+            "claims_5y": 0,
+            "convictions_5y": 0,
+            "postcode_risk": 0.2,
+            "theft_risk": 0.1,
+            "excess": 0,
+            "usage": "private",
+            "parking": "garage",
+            "hire_car": "none",
+            "windscreen": "no",
+            "rating": "market",
+        }
+        out = canonicalize_comp_car_input(row, domain=domain)
+        self.assertEqual(out["vehicle_value"], 5000.0)
+        self.assertEqual(out["excess"], 100)
+
 
 if __name__ == "__main__":
     unittest.main()

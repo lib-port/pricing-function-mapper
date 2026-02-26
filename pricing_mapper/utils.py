@@ -58,7 +58,7 @@ def pick_unique(
 
 
 def propose_pool(domain: DomainSpec, n: int, rng: np.random.Generator) -> list[dict[str, Any]]:
-    return [canonicalize_comp_car_input(x) for x in domain.sample_lhs(n=n, rng=rng)]
+    return [canonicalize_comp_car_input(x, domain) for x in domain.sample_lhs(n=n, rng=rng)]
 
 
 def jitter_around(
@@ -90,7 +90,7 @@ def jitter_around(
             if rng.uniform() < p_cat_flip:
                 x[cv.name] = rng.choice(cv.levels)
 
-        xs.append(canonicalize_comp_car_input(x))
+        xs.append(canonicalize_comp_car_input(x, domain))
     return xs
 
 
@@ -100,6 +100,7 @@ def binary_search_breakpoint(
     low: float,
     high: float,
     predict_fn,
+    domain: DomainSpec | None = None,
     max_queries: int = 6,
     threshold: float = 40.0,
 ) -> list[dict[str, Any]]:
@@ -107,8 +108,8 @@ def binary_search_breakpoint(
     x_high = dict(x_base)
     x_low[var_name] = low
     x_high[var_name] = high
-    x_low = canonicalize_comp_car_input(x_low)
-    x_high = canonicalize_comp_car_input(x_high)
+    x_low = canonicalize_comp_car_input(x_low, domain)
+    x_high = canonicalize_comp_car_input(x_high, domain)
 
     pred = predict_fn([x_low, x_high])
     if abs(float(pred[1] - pred[0])) < threshold:
@@ -120,7 +121,7 @@ def binary_search_breakpoint(
         mid = (a + b) / 2.0
         x_mid = dict(x_base)
         x_mid[var_name] = mid
-        x_mid = canonicalize_comp_car_input(x_mid)
+        x_mid = canonicalize_comp_car_input(x_mid, domain)
         points.append(x_mid)
 
         pa = dict(x_base)

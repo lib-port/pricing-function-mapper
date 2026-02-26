@@ -5,6 +5,12 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
+from pricing_mapper.domain import (
+    DOMAIN_CATEGORICAL_NAMES,
+    DOMAIN_CONTINUOUS_NAMES,
+    DOMAIN_INTEGER_NAMES,
+)
+
 
 @dataclass
 class MapperConfig:
@@ -19,6 +25,7 @@ class MapperConfig:
     output_csv: str = "comp_car_quotes_advanced.csv"
     output_metadata_json: str = "run_metadata.json"
     state_path: str = "run_state.json"
+    engine_path: str = "pricing_engine.pkl"
 
     resume: bool = False
     checkpoint_every_batches: int = 1
@@ -81,18 +88,24 @@ def validate_domain_overrides(overrides: dict[str, Any]) -> None:
             raise ValueError(f"domain_overrides.{bucket} must be a dictionary.")
 
     for name, cfg in overrides.get("continuous", {}).items():
+        if name not in DOMAIN_CONTINUOUS_NAMES:
+            raise ValueError(f"Unknown continuous override '{name}'.")
         if not isinstance(cfg, dict) or "low" not in cfg or "high" not in cfg:
             raise ValueError(f"continuous override '{name}' must provide low/high.")
         if float(cfg["low"]) >= float(cfg["high"]):
             raise ValueError(f"continuous override '{name}' has low >= high.")
 
     for name, cfg in overrides.get("integers", {}).items():
+        if name not in DOMAIN_INTEGER_NAMES:
+            raise ValueError(f"Unknown integers override '{name}'.")
         if not isinstance(cfg, dict) or "low" not in cfg or "high" not in cfg:
             raise ValueError(f"integers override '{name}' must provide low/high.")
         if int(cfg["low"]) >= int(cfg["high"]):
             raise ValueError(f"integers override '{name}' has low >= high.")
 
     for name, levels in overrides.get("categorical", {}).items():
+        if name not in DOMAIN_CATEGORICAL_NAMES:
+            raise ValueError(f"Unknown categorical override '{name}'.")
         if not isinstance(levels, list) or len(levels) < 2:
             raise ValueError(
                 f"categorical override '{name}' must be a list with at least 2 levels."
@@ -114,6 +127,14 @@ def validate_config(cfg: MapperConfig) -> None:
         raise ValueError("refit_every_batches must be > 0")
     if cfg.cv_subsample_max <= 0:
         raise ValueError("cv_subsample_max must be > 0")
+    if cfg.checkpoint_every_batches < 0:
+        raise ValueError("checkpoint_every_batches must be >= 0")
+    if cfg.rf_n_models <= 0:
+        raise ValueError("rf_n_models must be > 0")
+    if cfg.rf_n_estimators <= 0:
+        raise ValueError("rf_n_estimators must be > 0")
+    if cfg.rf_n_jobs == 0:
+        raise ValueError("rf_n_jobs must be -1 or a positive integer")
 
     if cfg.distance_backend not in {"brute", "knn"}:
         raise ValueError("distance_backend must be one of: brute, knn")
@@ -129,5 +150,7 @@ def validate_config(cfg: MapperConfig) -> None:
 
     if cfg.run_id is not None and not cfg.run_id.strip():
         raise ValueError("run_id cannot be empty if provided")
+    if not cfg.engine_path:
+        raise ValueError("engine_path cannot be empty")
 
     validate_domain_overrides(cfg.domain_overrides)

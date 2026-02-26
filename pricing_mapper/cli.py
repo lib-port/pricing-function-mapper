@@ -10,11 +10,13 @@ from typing import Any
 import numpy as np
 
 from pricing_mapper.active_mapper import ActiveQuoteMapper
+from pricing_mapper.api import serve_api
 from pricing_mapper.artifacts import ensure_parent_dirs, resolve_run_paths
 from pricing_mapper.benchmark import run_benchmark
 from pricing_mapper.config import MapperConfig, dump_config, load_config, validate_config
 from pricing_mapper.domain import build_comp_car_domain
 from pricing_mapper.encoding import encode_features
+from pricing_mapper.engine import PricingEngine, load_row_json, load_rows_csv, write_rows_csv
 from pricing_mapper.quote import load_quote_fn
 
 LOG_FORMAT = "%(asctime)s | %(levelname)s | %(name)s | %(message)s"
@@ -42,6 +44,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--output-csv", type=str)
     p.add_argument("--output-metadata-json", type=str)
     p.add_argument("--state-path", type=str)
+    p.add_argument("--engine-path", type=str)
 
     p.add_argument("--resume", action="store_true")
     p.add_argument("--distance-backend", choices=["brute", "knn"])
@@ -53,6 +56,13 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--rf-n-jobs", type=int)
     p.add_argument("--quote-provider", type=str)
     p.add_argument("--disable-monotone", action="store_true")
+    p.add_argument("--price-row", type=str, help="JSON row string for single premium prediction")
+    p.add_argument("--price-row-json", type=str, help="Path to JSON row file for prediction")
+    p.add_argument("--price-input-csv", type=str, help="CSV path of rows to score")
+    p.add_argument("--price-output-csv", type=str, help="Output CSV path for scored batch")
+    p.add_argument("--serve-api", action="store_true", help="Serve pricing engine API")
+    p.add_argument("--host", type=str, default="127.0.0.1", help="API host for --serve-api")
+    p.add_argument("--port", type=int, default=8000, help="API port for --serve-api")
 
     p.add_argument(
         "--dry-run",
@@ -83,6 +93,7 @@ def apply_cli_overrides(cfg: MapperConfig, args: argparse.Namespace) -> MapperCo
         "output_csv": "output_csv",
         "output_metadata_json": "output_metadata_json",
         "state_path": "state_path",
+        "engine_path": "engine_path",
         "distance_backend": "distance_backend",
         "refit_every_batches": "refit_every_batches",
         "checkpoint_every_batches": "checkpoint_every_batches",
@@ -140,6 +151,7 @@ def _run_single(cfg: MapperConfig, logger: logging.Logger) -> int:
             "output_csv": str(output_csv),
             "output_metadata_json": cfg.output_metadata_json,
             "state_path": cfg.state_path,
+            "engine_path": cfg.engine_path,
         },
     }
 
@@ -152,8 +164,64 @@ def _run_single(cfg: MapperConfig, logger: logging.Logger) -> int:
     output_meta = Path(cfg.output_metadata_json)
     output_meta.write_text(json.dumps(metadata, indent=2))
 
+    engine = PricingEngine.from_mapper(
+        domain=domain,
+        rf=mapper.rf,
+        hgb=mapper.hgb,
+        use_monotone=mapper.use_monotone,
+        cfg=cfg,
+    )
+    engine.save(cfg.engine_path)
+
     logger.info("Saved quotes to %s", output_csv)
     logger.info("Saved metadata to %s", output_meta)
+    logger.info("Saved pricing engine to %s", cfg.engine_path)
+    return 0
+
+
+def _run_pricing_mode(args: argparse.Namespace, logger: logging.Logger) -> int:
+    engine_path = args.engine_path
+    if not engine_path:
+        raise ValueError("engine_path is required for pricing mode")
+    engine = PricingEngine.load(engine_path)
+
+    if args.serve_api:
+        serve_api(engine_path=engine_path, host=args.host, port=args.port)
+        return 0
+
+    has_single = bool(args.price_row or args.price_row_json)
+    has_batch = bool(args.price_input_csv)
+    if has_single and has_batch:
+        raise ValueError("Use either single-row or batch pricing mode, not both")
+    if not has_single and not has_batch:
+        raise ValueError(
+            "Pricing mode requires --price-row, --price-row-json, or --price-input-csv"
+        )
+
+    if args.price_row_json:
+        row = load_row_json(args.price_row_json)
+        premium = engine.predict_row(row)
+        payload = {"premium": round(float(premium), 2)}
+        print(json.dumps(payload, indent=2))
+        return 0
+
+    if args.price_row:
+        row = json.loads(args.price_row)
+        if not isinstance(row, dict):
+            raise ValueError("--price-row must be a JSON object")
+        premium = engine.predict_row(row)
+        payload = {"premium": round(float(premium), 2)}
+        print(json.dumps(payload, indent=2))
+        return 0
+
+    rows = load_rows_csv(args.price_input_csv)
+    scored = engine.predict_rows_with_inputs(rows)
+    out_csv = args.price_output_csv or str(
+        Path(args.price_input_csv).with_name("priced_output.csv")
+    )
+    write_rows_csv(out_csv, scored)
+    logger.info("Scored %d rows", len(scored))
+    logger.info("Saved scored output to %s", out_csv)
     return 0
 
 
@@ -161,6 +229,15 @@ def run_cli() -> int:
     args = parse_args()
     setup_logging(args.log_level)
     logger = logging.getLogger("pricing_mapper")
+
+    pricing_mode = bool(
+        args.price_row
+        or args.price_row_json
+        or args.price_input_csv
+        or args.serve_api
+    )
+    if pricing_mode:
+        return _run_pricing_mode(args, logger)
 
     cfg = load_config(args.config)
     cfg = apply_cli_overrides(cfg, args)

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib
 from collections.abc import Callable
+from datetime import UTC, datetime
 from typing import Any
 
 import numpy as np
@@ -27,7 +28,8 @@ def mock_comp_car_quote(x: dict[str, Any]) -> float:
     base = 300.0 + 0.0105 * value
     base *= 1.0 + 0.62 * postcode_risk
 
-    veh_age = max(0, 2026 - year)
+    current_year = datetime.now(UTC).year
+    veh_age = max(0, current_year - year)
     base *= 1.0 + 0.010 * min(veh_age, 10) + 0.020 * max(0, veh_age - 10)
 
     if age < 21:

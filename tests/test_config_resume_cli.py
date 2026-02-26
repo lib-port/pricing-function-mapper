@@ -18,6 +18,21 @@ class ConfigResumeCliTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             validate_config(cfg)
 
+    def test_validate_config_rf_hyperparameters(self) -> None:
+        with self.assertRaises(ValueError):
+            validate_config(MapperConfig(rf_n_models=0))
+        with self.assertRaises(ValueError):
+            validate_config(MapperConfig(rf_n_estimators=0))
+        with self.assertRaises(ValueError):
+            validate_config(MapperConfig(rf_n_jobs=0))
+
+    def test_validate_config_unknown_domain_override_key(self) -> None:
+        cfg = MapperConfig(
+            domain_overrides={"continuous": {"unknown_feature": {"low": 0, "high": 1}}}
+        )
+        with self.assertRaises(ValueError):
+            validate_config(cfg)
+
     def test_state_corruption_raises(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             bad = Path(tmpdir) / "bad_state.json"
@@ -76,9 +91,11 @@ class ConfigResumeCliTests(unittest.TestCase):
             run_dir = Path(tmpdir) / "resume_case"
             csv_path = run_dir / "comp_car_quotes_advanced.csv"
             meta_path = run_dir / "run_metadata.json"
+            engine_path = run_dir / "pricing_engine.pkl"
 
             self.assertTrue(csv_path.exists())
             self.assertTrue(meta_path.exists())
+            self.assertTrue(engine_path.exists())
 
             with meta_path.open() as f:
                 meta = json.load(f)
@@ -88,9 +105,44 @@ class ConfigResumeCliTests(unittest.TestCase):
             self.assertIn("artifacts", meta)
             self.assertIn("profile_seconds", meta["stats"])
             self.assertEqual(meta["artifacts"]["run_id"], "resume_case")
+            self.assertEqual(meta["artifacts"]["engine_path"], str(engine_path))
 
             lines = csv_path.read_text().strip().splitlines()
             self.assertEqual(len(lines) - 1, 16)
+
+    def test_resume_rejects_incompatible_state_config(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base_cfg = MapperConfig(
+                budget=10,
+                init_n=5,
+                batch_size=5,
+                pool_size=120,
+                output_dir=tmpdir,
+                run_id="resume_mismatch_case",
+                use_monotone_if_available=False,
+                rf_n_models=2,
+                rf_n_estimators=30,
+                checkpoint_every_batches=1,
+            )
+            logger = logging.getLogger("test_cli")
+            _run_single(base_cfg, logger)
+
+            resumed = MapperConfig(
+                budget=12,
+                init_n=5,
+                batch_size=5,
+                pool_size=120,
+                output_dir=tmpdir,
+                run_id="resume_mismatch_case",
+                resume=True,
+                quote_provider="pricing_mapper.quote:mock_comp_car_quote",
+                use_monotone_if_available=False,
+                rf_n_models=2,
+                rf_n_estimators=30,
+                checkpoint_every_batches=1,
+            )
+            with self.assertRaises(ValueError):
+                _run_single(resumed, logger)
 
     def test_benchmark_smoke(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

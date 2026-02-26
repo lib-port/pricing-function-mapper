@@ -19,6 +19,7 @@ def resolve_run_paths(cfg: MapperConfig) -> MapperConfig:
     output_csv = str(run_dir / Path(cfg.output_csv).name)
     output_metadata_json = str(run_dir / Path(cfg.output_metadata_json).name)
     state_path = str(run_dir / Path(cfg.state_path).name)
+    engine_path = str(run_dir / Path(cfg.engine_path).name)
 
     return replace(
         cfg,
@@ -26,6 +27,7 @@ def resolve_run_paths(cfg: MapperConfig) -> MapperConfig:
         output_csv=output_csv,
         output_metadata_json=output_metadata_json,
         state_path=state_path,
+        engine_path=engine_path,
     )
 
 
@@ -33,3 +35,4 @@ def ensure_parent_dirs(cfg: MapperConfig) -> None:
     Path(cfg.output_csv).parent.mkdir(parents=True, exist_ok=True)
     Path(cfg.output_metadata_json).parent.mkdir(parents=True, exist_ok=True)
     Path(cfg.state_path).parent.mkdir(parents=True, exist_ok=True)
+    Path(cfg.engine_path).parent.mkdir(parents=True, exist_ok=True)

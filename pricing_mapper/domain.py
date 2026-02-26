@@ -1,9 +1,32 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Any
 
 import numpy as np
+
+DOMAIN_CONTINUOUS_NAMES: tuple[str, ...] = (
+    "driver_age",
+    "postcode_risk",
+    "vehicle_value",
+    "theft_risk",
+)
+DOMAIN_INTEGER_NAMES: tuple[str, ...] = (
+    "years_licensed",
+    "vehicle_year",
+    "annual_km",
+    "claims_5y",
+    "convictions_5y",
+    "excess",
+)
+DOMAIN_CATEGORICAL_NAMES: tuple[str, ...] = (
+    "usage",
+    "parking",
+    "hire_car",
+    "windscreen",
+    "rating",
+)
 
 
 @dataclass(frozen=True)
@@ -61,20 +84,61 @@ class DomainSpec:
         return xs
 
 
-def canonicalize_comp_car_input(x: dict[str, Any]) -> dict[str, Any]:
+def _current_utc_year() -> int:
+    return datetime.now(UTC).year
+
+
+def canonicalize_comp_car_input(
+    x: dict[str, Any],
+    domain: DomainSpec | None = None,
+) -> dict[str, Any]:
     """Apply product constraints and bound clipping."""
     x = dict(x)
 
-    x["driver_age"] = float(np.clip(x["driver_age"], 17, 90))
-    x["years_licensed"] = int(np.clip(x["years_licensed"], 0, int(x["driver_age"]) - 16))
-    x["vehicle_year"] = int(np.clip(x["vehicle_year"], 1998, 2026))
-    x["vehicle_value"] = float(np.clip(x["vehicle_value"], 2000, 200000))
-    x["annual_km"] = int(np.clip(x["annual_km"], 1000, 60000))
-    x["claims_5y"] = int(np.clip(x["claims_5y"], 0, 6))
-    x["convictions_5y"] = int(np.clip(x["convictions_5y"], 0, 6))
-    x["postcode_risk"] = float(np.clip(x["postcode_risk"], 0.0, 1.0))
-    x["theft_risk"] = float(np.clip(x["theft_risk"], 0.0, 1.0))
-    x["excess"] = int(np.clip(x["excess"], 0, 5000))
+    current_year = _current_utc_year()
+    if domain is None:
+        cont_bounds: dict[str, tuple[float, float]] = {
+            "driver_age": (17.0, 90.0),
+            "postcode_risk": (0.0, 1.0),
+            "vehicle_value": (2000.0, 200000.0),
+            "theft_risk": (0.0, 1.0),
+        }
+        int_bounds: dict[str, tuple[int, int]] = {
+            "years_licensed": (0, 70),
+            "vehicle_year": (1998, current_year),
+            "annual_km": (1000, 60000),
+            "claims_5y": (0, 6),
+            "convictions_5y": (0, 6),
+            "excess": (0, 5000),
+        }
+    else:
+        cont_bounds = {v.name: (float(v.low), float(v.high)) for v in domain.continuous}
+        int_bounds = {v.name: (int(v.low), int(v.high)) for v in domain.integers}
+
+    age_low, age_high = cont_bounds.get("driver_age", (17.0, 90.0))
+    x["driver_age"] = float(np.clip(float(x["driver_age"]), age_low, age_high))
+    max_years_licensed = max(0, int(x["driver_age"]) - 16)
+    yl_low, yl_high = int_bounds.get("years_licensed", (0, 70))
+    x["years_licensed"] = int(
+        np.clip(int(x["years_licensed"]), yl_low, min(yl_high, max_years_licensed))
+    )
+
+    year_low, year_high = int_bounds.get("vehicle_year", (1998, current_year))
+    x["vehicle_year"] = int(np.clip(int(x["vehicle_year"]), year_low, year_high))
+    value_low, value_high = cont_bounds.get("vehicle_value", (2000.0, 200000.0))
+    x["vehicle_value"] = float(np.clip(float(x["vehicle_value"]), value_low, value_high))
+    km_low, km_high = int_bounds.get("annual_km", (1000, 60000))
+    x["annual_km"] = int(np.clip(int(x["annual_km"]), km_low, km_high))
+    claims_low, claims_high = int_bounds.get("claims_5y", (0, 6))
+    x["claims_5y"] = int(np.clip(int(x["claims_5y"]), claims_low, claims_high))
+    conv_low, conv_high = int_bounds.get("convictions_5y", (0, 6))
+    x["convictions_5y"] = int(np.clip(int(x["convictions_5y"]), conv_low, conv_high))
+    post_low, post_high = cont_bounds.get("postcode_risk", (0.0, 1.0))
+    x["postcode_risk"] = float(np.clip(float(x["postcode_risk"]), post_low, post_high))
+    theft_low, theft_high = cont_bounds.get("theft_risk", (0.0, 1.0))
+    x["theft_risk"] = float(np.clip(float(x["theft_risk"]), theft_low, theft_high))
+    excess_low, excess_high = int_bounds.get("excess", (0, 5000))
+    x["excess"] = int(np.clip(int(x["excess"]), excess_low, excess_high))
 
     return x
 
@@ -82,6 +146,7 @@ def canonicalize_comp_car_input(x: dict[str, Any]) -> dict[str, Any]:
 def build_comp_car_domain(overrides: dict[str, Any] | None = None) -> DomainSpec:
     """Build domain with optional per-variable bound/levels overrides from config."""
     overrides = overrides or {}
+    current_year = _current_utc_year()
 
     cont_defaults = {
         "driver_age": (17.0, 90.0),
@@ -91,7 +156,7 @@ def build_comp_car_domain(overrides: dict[str, Any] | None = None) -> DomainSpec
     }
     int_defaults = {
         "years_licensed": (0, 70),
-        "vehicle_year": (1998, 2026),
+        "vehicle_year": (1998, current_year),
         "annual_km": (1000, 60000),
         "claims_5y": (0, 6),
         "convictions_5y": (0, 6),

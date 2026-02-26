@@ -29,6 +29,7 @@ from pricing_mapper.utils import (
 )
 
 STATE_SCHEMA_VERSION = 2
+RESUME_CFG_COMPAT_KEYS: tuple[str, ...] = ("quote_provider", "domain_overrides")
 
 
 @dataclass
@@ -118,7 +119,7 @@ class ActiveQuoteMapper:
         self.profile_seconds[key] = self.profile_seconds.get(key, 0.0) + float(elapsed)
 
     def query(self, row: dict[str, Any]) -> float:
-        row = canonicalize_comp_car_input(row)
+        row = canonicalize_comp_car_input(row, self.domain)
         key = stable_key(row)
         if key in self.cache:
             return self.cache[key]
@@ -128,7 +129,7 @@ class ActiveQuoteMapper:
 
     def add_samples(self, rows: list[dict[str, Any]]) -> None:
         for row in rows:
-            row = canonicalize_comp_car_input(row)
+            row = canonicalize_comp_car_input(row, self.domain)
             key = stable_key(row)
             value = self.cache.get(key)
             if value is None:
@@ -268,6 +269,7 @@ class ActiveQuoteMapper:
                         low=low,
                         high=high,
                         predict_fn=lambda rows: self._predict(rows)[0],
+                        domain=self.domain,
                         max_queries=5,
                         threshold=45.0,
                     )
@@ -345,6 +347,20 @@ class ActiveQuoteMapper:
         missing = [k for k in required if k not in payload]
         if missing:
             raise ValueError(f"State file missing required keys: {missing}")
+
+        saved_cfg = payload.get("cfg")
+        if isinstance(saved_cfg, dict):
+            current_cfg = asdict(self.cfg)
+            mismatched = [
+                key
+                for key in RESUME_CFG_COMPAT_KEYS
+                if saved_cfg.get(key) != current_cfg.get(key)
+            ]
+            if mismatched:
+                raise ValueError(
+                    "State/config mismatch for resume. "
+                    f"Incompatible keys: {', '.join(mismatched)}"
+                )
 
         self.x_rows = payload["x_rows"]
         self.y_vals = [float(v) for v in payload["y_vals"]]

@@ -9,6 +9,7 @@
   "output_csv": "comp_car_quotes_advanced.csv",
   "output_metadata_json": "run_metadata.json",
   "state_path": "run_state.json",
+  "engine_path": "pricing_engine.pkl",
   "resume": false,
   "checkpoint_every_batches": 1,
   "refit_every_batches": 1,
