@@ -1,11 +1,11 @@
 {
   "seed": 42,
-  "budget": 260,
-  "init_n": 95,
-  "batch_size": 20,
-  "pool_size": 14000,
+  "budget": 180,
+  "init_n": 70,
+  "batch_size": 15,
+  "pool_size": 10000,
   "output_dir": "outputs",
-  "run_id": null,
+  "run_id": "segment_low_risk_high_premium",
   "output_csv": "comp_car_quotes_advanced.csv",
   "output_metadata_json": "run_metadata.json",
   "state_path": "run_state.json",
@@ -16,30 +16,44 @@
   "cv_subsample_max": 1200,
   "use_monotone_if_available": true,
   "distance_backend": "knn",
-  "acquisition_mix": [0.45, 0.25, 0.20, 0.10],
+  "acquisition_mix": [0.3, 0.25, 0.3, 0.15],
   "breakpoint_vars": [
-    "driver_age",
-    "postcode_risk",
     "vehicle_value",
     "excess",
-    "vehicle_year",
+    "postcode_risk",
     "annual_km"
   ],
   "rf_n_models": 20,
   "rf_n_estimators": 600,
   "rf_n_jobs": -1,
-  "early_stop_patience_batches": 0,
+  "early_stop_patience_batches": 3,
   "early_stop_min_batches": 4,
   "early_stop_min_rel_improvement": 0.005,
-  "staged_mapping_enabled": false,
+  "staged_mapping_enabled": true,
   "staged_stage1_fraction": 0.4,
-  "staged_focus_jitter_per_anchor": 12,
-  "segment_focus_enabled": false,
-  "segment_constraints": {},
-  "segment_target_weight": 0.35,
-  "segment_sigma_weight": 0.2,
-  "segment_min_candidates": 400,
-  "segment_pool_max_tries": 4,
+  "staged_focus_jitter_per_anchor": 16,
+  "segment_focus_enabled": true,
+  "segment_constraints": {
+    "claims_5y": {
+      "max": 1
+    },
+    "convictions_5y": {
+      "max": 0
+    },
+    "postcode_risk": {
+      "max": 0.35
+    },
+    "parking": {
+      "in": ["garage", "driveway"]
+    },
+    "theft_risk": {
+      "max": 0.35
+    }
+  },
+  "segment_target_weight": 0.45,
+  "segment_sigma_weight": 0.25,
+  "segment_min_candidates": 500,
+  "segment_pool_max_tries": 5,
   "quote_provider": null,
   "domain_overrides": {
     "continuous": {},

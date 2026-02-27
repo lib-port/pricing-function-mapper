@@ -1,8 +1,22 @@
 # Pricing Function Mapper
 
+[![Python](https://img.shields.io/badge/python-%3E%3D3.11-3776AB?logo=python&logoColor=white)](https://www.python.org/)
+[![License: GPL v3](https://img.shields.io/badge/license-GPLv3-blue.svg)](LICENSE)
+[![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
+[![Lint: ruff](https://img.shields.io/badge/lint-ruff-D7FF64?logo=ruff&logoColor=111111)](https://github.com/astral-sh/ruff)
+[![Type check: mypy](https://img.shields.io/badge/type%20check-mypy-2A6DB2)](https://github.com/python/mypy)
+[![Tests: pytest](https://img.shields.io/badge/tests-pytest-0A9EDC?logo=pytest&logoColor=white)](https://github.com/pytest-dev/pytest)
+
 Active-learning mapper for a pricing function (default: mock comprehensive car insurance quote model).
 
 This project incrementally samples the input space, trains surrogate models, and selects high-value next queries to approximate the behavior of a target quote/pricing function.
+
+## Highlights
+
+- Active-learning query strategy with uncertainty, boundary, local-error, and breakpoint components.
+- Optional staged mapping and early stopping to reduce query volume.
+- Segment-focused acquisition for targeted analysis (e.g., low-risk/high-premium cohorts).
+- Reproducible artifacts: dataset, metadata, checkpoint state, and serialized pricing engine.
 
 ## Purpose
 
@@ -27,7 +41,7 @@ For each run:
    - boundary refinement
    - error-driven local exploration
    - breakpoint probing
-5. Repeat until budget is reached.
+5. Repeat until budget is reached or early-stop criteria are met.
 6. Write artifacts (dataset, metadata, state checkpoint, pricing engine).
 
 ## Repository Structure
@@ -41,6 +55,9 @@ For each run:
 - `pricing_mapper/engine.py`: serialized pricing engine artifact + inference helpers.
 - `pricing_mapper/api.py`: optional FastAPI serving interface for engine inference.
 - `pricing_mapper/benchmark.py`: benchmark presets and result writer.
+- `config.example.json`: baseline configuration template.
+- `config.segment.example.json`: segment-focused preset (low-risk/high-premium).
+- `scripts/quality.sh` and `scripts/smoke.sh`: local quality and smoke helpers.
 - `tests/`: unit and integration tests.
 
 ## Requirements
@@ -97,6 +114,35 @@ python -m pricing_mapper \
   --distance-backend knn \
   --output-dir outputs \
   --run-id my_run
+```
+
+### Segment-focused mapping (low-risk, high-premium)
+
+```bash
+python -m pricing_mapper \
+  --config config.example.json \
+  --segment-focus-enabled \
+  --segment-constraints '{"claims_5y":{"max":1},"convictions_5y":{"max":0},"postcode_risk":{"max":0.35},"parking":{"in":["garage","driveway"]}}' \
+  --segment-target-weight 0.45 \
+  --segment-sigma-weight 0.25
+```
+
+Or run the ready-made preset:
+
+```bash
+python -m pricing_mapper --config config.segment.example.json
+```
+
+### Early-stop + staged mapping example
+
+```bash
+python -m pricing_mapper \
+  --config config.example.json \
+  --staged-mapping-enabled \
+  --staged-stage1-fraction 0.4 \
+  --early-stop-patience-batches 3 \
+  --early-stop-min-batches 4 \
+  --early-stop-min-rel-improvement 0.005
 ```
 
 ### Resume a run
@@ -192,16 +238,21 @@ Use `config.example.json` as a template. Key options include:
 - Sampling controls: `budget`, `init_n`, `batch_size`, `pool_size`
 - Model controls: `rf_n_models`, `rf_n_estimators`, `refit_every_batches`
 - Search behavior: `distance_backend`, `acquisition_mix`, `breakpoint_vars`
+- Early stop controls: `early_stop_patience_batches`, `early_stop_min_batches`, `early_stop_min_rel_improvement`
+- Staged mapping controls: `staged_mapping_enabled`, `staged_stage1_fraction`, `staged_focus_jitter_per_anchor`
+- Segment targeting controls: `segment_focus_enabled`, `segment_constraints`, `segment_target_weight`, `segment_sigma_weight`, `segment_min_candidates`, `segment_pool_max_tries`
 - Performance controls: `cv_subsample_max`
 - Artifacts: `output_dir`, `run_id`, `output_csv`, `output_metadata_json`, `state_path`
 - Engine artifact: `engine_path`
 - Resume/checkpoint: `resume`, `checkpoint_every_batches`
 - Provider: `quote_provider`
+- Domain scoping: `domain_overrides`
 
 Validation behavior:
 
 - Unknown keys in `domain_overrides` are rejected (no silent ignore).
 - `rf_n_models` and `rf_n_estimators` must be `> 0`; `rf_n_jobs` cannot be `0`.
+- `segment_constraints` validate variable names and operator compatibility (`min`/`max`/`eq`/`in`).
 
 ## Output Artifacts
 
@@ -214,8 +265,10 @@ Contains sampled rows and true `premium` values queried from the provider.
 Includes:
 
 - run stats and elapsed time
+- completion flags (`completed_budget`, `early_stopped`, `stop_reason`)
 - per-phase profiling times
 - MAE diagnostics
+- optional segment-specific MAE diagnostics when `segment_constraints` are set
 - resolved config
 - feature list
 - artifact paths

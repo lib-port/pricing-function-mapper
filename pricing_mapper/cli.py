@@ -54,6 +54,22 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--rf-n-models", type=int)
     p.add_argument("--rf-n-estimators", type=int)
     p.add_argument("--rf-n-jobs", type=int)
+    p.add_argument("--early-stop-patience-batches", type=int)
+    p.add_argument("--early-stop-min-batches", type=int)
+    p.add_argument("--early-stop-min-rel-improvement", type=float)
+    p.add_argument("--staged-mapping-enabled", action="store_true")
+    p.add_argument("--staged-stage1-fraction", type=float)
+    p.add_argument("--staged-focus-jitter-per-anchor", type=int)
+    p.add_argument("--segment-focus-enabled", action="store_true")
+    p.add_argument("--segment-target-weight", type=float)
+    p.add_argument("--segment-sigma-weight", type=float)
+    p.add_argument("--segment-min-candidates", type=int)
+    p.add_argument("--segment-pool-max-tries", type=int)
+    p.add_argument(
+        "--segment-constraints",
+        type=str,
+        help="JSON object for segment constraints",
+    )
     p.add_argument("--quote-provider", type=str)
     p.add_argument("--disable-monotone", action="store_true")
     p.add_argument("--price-row", type=str, help="JSON row string for single premium prediction")
@@ -101,6 +117,15 @@ def apply_cli_overrides(cfg: MapperConfig, args: argparse.Namespace) -> MapperCo
         "rf_n_models": "rf_n_models",
         "rf_n_estimators": "rf_n_estimators",
         "rf_n_jobs": "rf_n_jobs",
+        "early_stop_patience_batches": "early_stop_patience_batches",
+        "early_stop_min_batches": "early_stop_min_batches",
+        "early_stop_min_rel_improvement": "early_stop_min_rel_improvement",
+        "staged_stage1_fraction": "staged_stage1_fraction",
+        "staged_focus_jitter_per_anchor": "staged_focus_jitter_per_anchor",
+        "segment_target_weight": "segment_target_weight",
+        "segment_sigma_weight": "segment_sigma_weight",
+        "segment_min_candidates": "segment_min_candidates",
+        "segment_pool_max_tries": "segment_pool_max_tries",
         "quote_provider": "quote_provider",
     }
 
@@ -114,6 +139,15 @@ def apply_cli_overrides(cfg: MapperConfig, args: argparse.Namespace) -> MapperCo
 
     if args.disable_monotone:
         updates["use_monotone_if_available"] = False
+    if args.staged_mapping_enabled:
+        updates["staged_mapping_enabled"] = True
+    if args.segment_focus_enabled:
+        updates["segment_focus_enabled"] = True
+    if args.segment_constraints is not None:
+        parsed = json.loads(args.segment_constraints)
+        if not isinstance(parsed, dict):
+            raise ValueError("--segment-constraints must be a JSON object")
+        updates["segment_constraints"] = parsed
 
     data = dump_config(cfg)
     data.update(updates)
@@ -155,11 +189,40 @@ def _run_single(cfg: MapperConfig, logger: logging.Logger) -> int:
         },
     }
 
+    if cfg.segment_constraints:
+        feature_rows = df.drop(columns=["premium"]).to_dict(orient="records")
+        seg_mask = np.asarray(
+            [mapper.row_in_segment(row) for row in feature_rows],
+            dtype=bool,
+        )
+        seg_count = int(seg_mask.sum())
+        metadata["segment"] = {
+            "enabled": bool(cfg.segment_focus_enabled),
+            "constraints": cfg.segment_constraints,
+            "count": seg_count,
+            "fraction": float(seg_count / max(1, len(df))),
+        }
+        if seg_count > 0:
+            y_true = df["premium"].to_numpy(dtype=float)
+            metadata["segment"]["mae_rf"] = float(
+                np.mean(np.abs(mu_rf[seg_mask] - y_true[seg_mask]))
+            )
+
     if mapper.use_monotone and mapper.hgb is not None:
         mu_m = mapper.hgb.predict(x_train)
         metadata["mae_monotone"] = float(
             np.mean(np.abs(mu_m - df["premium"].to_numpy(dtype=float)))
         )
+        if cfg.segment_constraints and "segment" in metadata:
+            seg_mask = np.asarray(
+                [mapper.row_in_segment(row) for row in feature_rows],
+                dtype=bool,
+            )
+            if int(seg_mask.sum()) > 0:
+                y_true = df["premium"].to_numpy(dtype=float)
+                metadata["segment"]["mae_monotone"] = float(
+                    np.mean(np.abs(mu_m[seg_mask] - y_true[seg_mask]))
+                )
 
     output_meta = Path(cfg.output_metadata_json)
     output_meta.write_text(json.dumps(metadata, indent=2))

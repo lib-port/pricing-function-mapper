@@ -39,6 +39,9 @@ class RunStats:
     mean: float
     std: float
     monotone_enabled: bool
+    completed_budget: bool
+    early_stopped: bool
+    stop_reason: str | None
     elapsed_seconds: float
     profile_seconds: dict[str, float]
 
@@ -117,6 +120,88 @@ class ActiveQuoteMapper:
 
     def _add_profile(self, key: str, elapsed: float) -> None:
         self.profile_seconds[key] = self.profile_seconds.get(key, 0.0) + float(elapsed)
+
+    @staticmethod
+    def _normalize01(arr: np.ndarray) -> np.ndarray:
+        if arr.size == 0:
+            return np.array([], dtype=float)
+        lo = float(np.min(arr))
+        hi = float(np.max(arr))
+        if hi <= lo:
+            return np.zeros_like(arr, dtype=float)
+        return (arr - lo) / (hi - lo)
+
+    def row_in_segment(self, row: dict[str, Any]) -> bool:
+        constraints = self.cfg.segment_constraints
+        if not constraints:
+            return True
+
+        for var, raw_rule in constraints.items():
+            val = row[var]
+            rule = raw_rule if isinstance(raw_rule, dict) else {"eq": raw_rule}
+
+            if "eq" in rule and val != rule["eq"]:
+                return False
+            if "in" in rule and val not in set(rule["in"]):
+                return False
+            if "min" in rule and float(val) < float(rule["min"]):
+                return False
+            if "max" in rule and float(val) > float(rule["max"]):
+                return False
+        return True
+
+    def _segment_mask(self, rows: list[dict[str, Any]]) -> np.ndarray:
+        return np.asarray([self.row_in_segment(row) for row in rows], dtype=bool)
+
+    def _focus_stage_active(self) -> bool:
+        if not self.cfg.staged_mapping_enabled:
+            return False
+        cutoff = max(1, int(round(self.cfg.budget * self.cfg.staged_stage1_fraction)))
+        return len(self.x_rows) >= cutoff
+
+    def _build_candidate_pool(self, x_train: np.ndarray) -> list[dict[str, Any]]:
+        pool = propose_pool(self.domain, n=self.cfg.pool_size, rng=self.rng)
+
+        if self._focus_stage_active():
+            _, sigma0 = self._predict(pool)
+            x_pool0 = self.encoder.encode(pool)
+            dmin0 = min_dist2_to_train(x_pool0, x_train, backend=self.cfg.distance_backend)
+            score0 = sigma0 * np.log1p(dmin0)
+            n_anchor = max(5, min(30, self.cfg.pool_size // 100))
+            focus_points: list[dict[str, Any]] = []
+            for idx in top_k_desc_idx(score0, n_anchor):
+                focus_points.extend(
+                    jitter_around(
+                        pool[int(idx)],
+                        self.domain,
+                        self.rng,
+                        n=self.cfg.staged_focus_jitter_per_anchor,
+                    )
+                )
+            if focus_points:
+                pool.extend(focus_points)
+
+        if self.cfg.segment_focus_enabled and self.cfg.segment_constraints:
+            tries = 1
+            seg_count = int(self._segment_mask(pool).sum())
+            while (
+                seg_count < self.cfg.segment_min_candidates
+                and tries < self.cfg.segment_pool_max_tries
+            ):
+                extra_n = max(50, self.cfg.pool_size // 2)
+                pool.extend(propose_pool(self.domain, n=extra_n, rng=self.rng))
+                seg_count = int(self._segment_mask(pool).sum())
+                tries += 1
+
+        deduped: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for row in pool:
+            key = stable_key(row)
+            if key in seen:
+                continue
+            seen.add(key)
+            deduped.append(row)
+        return deduped
 
     def query(self, row: dict[str, Any]) -> float:
         row = canonicalize_comp_car_input(row, self.domain)
@@ -210,11 +295,11 @@ class ActiveQuoteMapper:
         used = {stable_key(x) for x in self.x_rows}
 
         t0 = perf_counter()
-        pool = propose_pool(self.domain, n=self.cfg.pool_size, rng=self.rng)
+        pool = self._build_candidate_pool(x_train)
         self._add_profile("pool_generate", perf_counter() - t0)
 
         t0 = perf_counter()
-        _, sigma = self._predict(pool)
+        mu, sigma = self._predict(pool)
         self._add_profile("predict_pool", perf_counter() - t0)
 
         # Lightweight update heuristic for non-refit rounds: slightly widen uncertainty.
@@ -231,11 +316,28 @@ class ActiveQuoteMapper:
         score_unc = sigma
         score_bnd = sigma * np.log1p(dmin)
 
+        if self.cfg.segment_focus_enabled and self.cfg.segment_constraints:
+            seg_mask = self._segment_mask(pool)
+            if seg_mask.any():
+                mu_norm = self._normalize01(mu)
+                sigma_norm = self._normalize01(sigma)
+                segment_priority = seg_mask.astype(float) * (
+                    1.0
+                    + self.cfg.segment_target_weight * mu_norm
+                    + self.cfg.segment_sigma_weight * sigma_norm
+                )
+                score_unc = score_unc * segment_priority
+                score_bnd = score_bnd * segment_priority
+
         t0 = perf_counter()
         resid = self._cv_residuals(x_train, y_train, k=5)
         self._add_profile("cv_residuals", perf_counter() - t0)
 
-        top_resid_idx = top_k_desc_idx(np.abs(resid), max(5, min(25, len(resid) // 10)))
+        resid_score = np.abs(resid)
+        if self.cfg.segment_focus_enabled and self.cfg.segment_constraints:
+            train_seg_mask = self._segment_mask(self.x_rows)
+            resid_score = resid_score * (1.0 + 0.5 * train_seg_mask.astype(float))
+        top_resid_idx = top_k_desc_idx(resid_score, max(5, min(25, len(resid) // 10)))
         local_points: list[dict[str, Any]] = []
         for idx in top_resid_idx:
             local_points.extend(jitter_around(self.x_rows[int(idx)], self.domain, self.rng, n=25))
@@ -246,6 +348,18 @@ class ActiveQuoteMapper:
             x_local = self.encoder.encode(local_points)
             dmin_local = min_dist2_to_train(x_local, x_train, backend=self.cfg.distance_backend)
             score_err_local = sigma_local * np.log1p(dmin_local)
+            if self.cfg.segment_focus_enabled and self.cfg.segment_constraints:
+                mu_local, _ = self._predict(local_points)
+                seg_local = self._segment_mask(local_points)
+                if seg_local.any():
+                    mu_local_norm = self._normalize01(mu_local)
+                    sigma_local_norm = self._normalize01(sigma_local)
+                    local_priority = seg_local.astype(float) * (
+                        1.0
+                        + self.cfg.segment_target_weight * mu_local_norm
+                        + self.cfg.segment_sigma_weight * sigma_local_norm
+                    )
+                    score_err_local = score_err_local * local_priority
         else:
             score_err_local = np.array([], dtype=float)
         self._add_profile("local_scoring", perf_counter() - t0)
@@ -253,6 +367,10 @@ class ActiveQuoteMapper:
         t0 = perf_counter()
         bp_points: list[dict[str, Any]] = []
         anchors = [pool[i] for i in top_k_desc_idx(score_bnd, 40)]
+        if self.cfg.segment_focus_enabled and self.cfg.segment_constraints:
+            seg_anchors = [row for row in anchors if self.row_in_segment(row)]
+            if seg_anchors:
+                anchors = seg_anchors
         for var in self.cfg.breakpoint_vars:
             if len(bp_points) >= max(2, int(batch_size * self.cfg.acquisition_mix[3]) * 2):
                 break
@@ -274,6 +392,8 @@ class ActiveQuoteMapper:
                         threshold=45.0,
                     )
                 )
+        if self.cfg.segment_focus_enabled and self.cfg.segment_constraints:
+            bp_points = [row for row in bp_points if self.row_in_segment(row)]
         self._add_profile("breakpoint_search", perf_counter() - t0)
 
         n_unc = int(round(batch_size * self.cfg.acquisition_mix[0]))
@@ -377,6 +497,10 @@ class ActiveQuoteMapper:
 
     def run(self) -> tuple[pd.DataFrame, RunStats]:
         start = perf_counter()
+        early_stopped = False
+        stop_reason: str | None = None
+        best_fit_mae = float("inf")
+        stale_batches = 0
 
         if self.cfg.resume and Path(self.cfg.state_path).exists():
             self.load_state(self.cfg.state_path)
@@ -416,6 +540,34 @@ class ActiveQuoteMapper:
             ):
                 self.save_state(self.cfg.state_path)
 
+            if self.cfg.early_stop_patience_batches > 0:
+                _, y_fit = self._ensure_models(force_refit=True)
+                mu_fit, _ = self._predict(self.x_rows)
+                fit_mae = float(np.mean(np.abs(mu_fit - y_fit)))
+                if not np.isfinite(best_fit_mae):
+                    best_fit_mae = fit_mae
+                    stale_batches = 0
+                else:
+                    rel_improve = (best_fit_mae - fit_mae) / max(best_fit_mae, 1e-9)
+                    if rel_improve >= self.cfg.early_stop_min_rel_improvement:
+                        best_fit_mae = fit_mae
+                        stale_batches = 0
+                    else:
+                        stale_batches += 1
+
+                if (
+                    batch_count >= self.cfg.early_stop_min_batches
+                    and stale_batches >= self.cfg.early_stop_patience_batches
+                ):
+                    early_stopped = True
+                    stop_reason = (
+                        "early_stop_plateau:"
+                        f" mae={fit_mae:.4f}, best={best_fit_mae:.4f}, "
+                        f"stale_batches={stale_batches}"
+                    )
+                    self.logger.info("Stopping early: %s", stop_reason)
+                    break
+
         df = pd.DataFrame(self.x_rows)
         df["premium"] = np.asarray(self.y_vals, dtype=float)
 
@@ -429,6 +581,9 @@ class ActiveQuoteMapper:
             mean=mean,
             std=std,
             monotone_enabled=self.use_monotone,
+            completed_budget=len(df) >= self.cfg.budget,
+            early_stopped=early_stopped,
+            stop_reason=stop_reason,
             elapsed_seconds=total_elapsed,
             profile_seconds=dict(self.profile_seconds),
         )

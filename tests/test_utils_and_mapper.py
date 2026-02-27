@@ -73,6 +73,32 @@ class UtilsAndMapperTests(unittest.TestCase):
         self.assertEqual(len(df), 30)
         self.assertEqual(stats.samples, 30)
 
+    def test_early_stop_can_end_before_budget(self) -> None:
+        cfg = MapperConfig(
+            budget=80,
+            init_n=20,
+            batch_size=10,
+            pool_size=600,
+            seed=7,
+            checkpoint_every_batches=0,
+            refit_every_batches=1,
+            early_stop_patience_batches=1,
+            early_stop_min_batches=1,
+            early_stop_min_rel_improvement=1.0,
+            use_monotone_if_available=False,
+            rf_n_models=2,
+            rf_n_estimators=40,
+        )
+        mapper = ActiveQuoteMapper(
+            domain=build_comp_car_domain(),
+            quote_fn=mock_comp_car_quote,
+            cfg=cfg,
+        )
+        df, stats = mapper.run()
+        self.assertTrue(stats.early_stopped)
+        self.assertLess(len(df), 80)
+        self.assertFalse(stats.completed_budget)
+
 
 if __name__ == "__main__":
     unittest.main()

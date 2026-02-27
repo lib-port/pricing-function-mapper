@@ -50,6 +50,21 @@ class MapperConfig:
     rf_n_estimators: int = 600
     rf_n_jobs: int = -1
 
+    early_stop_patience_batches: int = 0
+    early_stop_min_batches: int = 4
+    early_stop_min_rel_improvement: float = 0.005
+
+    staged_mapping_enabled: bool = False
+    staged_stage1_fraction: float = 0.40
+    staged_focus_jitter_per_anchor: int = 12
+
+    segment_focus_enabled: bool = False
+    segment_constraints: dict[str, Any] = field(default_factory=dict)
+    segment_target_weight: float = 0.35
+    segment_sigma_weight: float = 0.20
+    segment_min_candidates: int = 400
+    segment_pool_max_tries: int = 4
+
     quote_provider: str | None = None
     domain_overrides: dict[str, Any] = field(default_factory=dict)
 
@@ -114,6 +129,55 @@ def validate_domain_overrides(overrides: dict[str, Any]) -> None:
             raise ValueError(f"categorical override '{name}' contains duplicate levels.")
 
 
+def validate_segment_constraints(constraints: dict[str, Any]) -> None:
+    if not isinstance(constraints, dict):
+        raise ValueError("segment_constraints must be a dictionary.")
+
+    known_vars = set(DOMAIN_CONTINUOUS_NAMES) | set(DOMAIN_INTEGER_NAMES) | set(
+        DOMAIN_CATEGORICAL_NAMES
+    )
+    numeric_vars = set(DOMAIN_CONTINUOUS_NAMES) | set(DOMAIN_INTEGER_NAMES)
+    categorical_vars = set(DOMAIN_CATEGORICAL_NAMES)
+
+    for name, raw_rule in constraints.items():
+        if name not in known_vars:
+            raise ValueError(f"Unknown segment constraint variable '{name}'.")
+
+        if isinstance(raw_rule, dict):
+            allowed = {"min", "max", "eq", "in"}
+            unknown = set(raw_rule) - allowed
+            if unknown:
+                raise ValueError(
+                    f"segment_constraints['{name}'] has unknown keys: {sorted(unknown)}"
+                )
+            if not raw_rule:
+                raise ValueError(f"segment_constraints['{name}'] cannot be empty.")
+        else:
+            raw_rule = {"eq": raw_rule}
+
+        if name in numeric_vars:
+            if "in" in raw_rule:
+                raise ValueError(
+                    f"segment_constraints['{name}'] cannot use 'in' for numeric variables."
+                )
+            if "min" in raw_rule and "max" in raw_rule:
+                if float(raw_rule["min"]) > float(raw_rule["max"]):
+                    raise ValueError(
+                        f"segment_constraints['{name}'] has min greater than max."
+                    )
+
+        if name in categorical_vars:
+            if "min" in raw_rule or "max" in raw_rule:
+                raise ValueError(
+                    f"segment_constraints['{name}'] cannot use min/max for categorical variables."
+                )
+            if "in" in raw_rule:
+                if not isinstance(raw_rule["in"], list) or len(raw_rule["in"]) == 0:
+                    raise ValueError(
+                        f"segment_constraints['{name}'].in must be a non-empty list."
+                    )
+
+
 def validate_config(cfg: MapperConfig) -> None:
     if cfg.budget <= 0:
         raise ValueError("budget must be > 0")
@@ -135,6 +199,24 @@ def validate_config(cfg: MapperConfig) -> None:
         raise ValueError("rf_n_estimators must be > 0")
     if cfg.rf_n_jobs == 0:
         raise ValueError("rf_n_jobs must be -1 or a positive integer")
+    if cfg.early_stop_patience_batches < 0:
+        raise ValueError("early_stop_patience_batches must be >= 0")
+    if cfg.early_stop_min_batches < 1:
+        raise ValueError("early_stop_min_batches must be >= 1")
+    if cfg.early_stop_min_rel_improvement < 0:
+        raise ValueError("early_stop_min_rel_improvement must be >= 0")
+    if not (0 < cfg.staged_stage1_fraction < 1):
+        raise ValueError("staged_stage1_fraction must be between 0 and 1")
+    if cfg.staged_focus_jitter_per_anchor <= 0:
+        raise ValueError("staged_focus_jitter_per_anchor must be > 0")
+    if cfg.segment_target_weight < 0:
+        raise ValueError("segment_target_weight must be >= 0")
+    if cfg.segment_sigma_weight < 0:
+        raise ValueError("segment_sigma_weight must be >= 0")
+    if cfg.segment_min_candidates < 1:
+        raise ValueError("segment_min_candidates must be >= 1")
+    if cfg.segment_pool_max_tries < 1:
+        raise ValueError("segment_pool_max_tries must be >= 1")
 
     if cfg.distance_backend not in {"brute", "knn"}:
         raise ValueError("distance_backend must be one of: brute, knn")
@@ -154,3 +236,4 @@ def validate_config(cfg: MapperConfig) -> None:
         raise ValueError("engine_path cannot be empty")
 
     validate_domain_overrides(cfg.domain_overrides)
+    validate_segment_constraints(cfg.segment_constraints)

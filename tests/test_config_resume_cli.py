@@ -33,6 +33,15 @@ class ConfigResumeCliTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             validate_config(cfg)
 
+    def test_validate_config_segment_constraints(self) -> None:
+        bad_var = MapperConfig(segment_constraints={"unknown_feature": {"max": 1}})
+        with self.assertRaises(ValueError):
+            validate_config(bad_var)
+
+        bad_range = MapperConfig(segment_constraints={"claims_5y": {"min": 2, "max": 1}})
+        with self.assertRaises(ValueError):
+            validate_config(bad_range)
+
     def test_state_corruption_raises(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             bad = Path(tmpdir) / "bad_state.json"
@@ -162,6 +171,36 @@ class ConfigResumeCliTests(unittest.TestCase):
             self.assertEqual(len(payload["results"]), len(BENCHMARK_PRESETS))
             self.assertTrue(Path(out).exists())
             self.assertTrue(Path(out).with_suffix(".csv").exists())
+
+    def test_segment_metadata_written(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cfg = MapperConfig(
+                budget=12,
+                init_n=6,
+                batch_size=3,
+                pool_size=120,
+                output_dir=tmpdir,
+                run_id="segment_case",
+                use_monotone_if_available=False,
+                rf_n_models=2,
+                rf_n_estimators=30,
+                checkpoint_every_batches=0,
+                segment_focus_enabled=True,
+                segment_constraints={
+                    "claims_5y": {"max": 1},
+                    "convictions_5y": {"max": 0},
+                },
+            )
+            logger = logging.getLogger("test_cli")
+            _run_single(cfg, logger)
+
+            meta_path = Path(tmpdir) / "segment_case" / "run_metadata.json"
+            with meta_path.open() as f:
+                meta = json.load(f)
+
+            self.assertIn("segment", meta)
+            self.assertIn("count", meta["segment"])
+            self.assertIn("fraction", meta["segment"])
 
 
 if __name__ == "__main__":
