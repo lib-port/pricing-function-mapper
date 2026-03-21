@@ -1,0 +1,91 @@
+Metadata-Version: 2.4
+Name: pricing-function-mapper
+Version: 0.1.0
+Summary: Active-learning mapper for comprehensive car pricing functions
+Requires-Python: >=3.11
+Description-Content-Type: text/markdown
+License-File: LICENSE
+Requires-Dist: numpy==2.4.2
+Requires-Dist: pandas==3.0.1
+Requires-Dist: scikit-learn==1.8.0
+Provides-Extra: dev
+Requires-Dist: pytest>=8.2.0; extra == "dev"
+Requires-Dist: black>=24.8.0; extra == "dev"
+Requires-Dist: ruff>=0.6.8; extra == "dev"
+Requires-Dist: mypy>=1.11.0; extra == "dev"
+Requires-Dist: pre-commit>=3.8.0; extra == "dev"
+Dynamic: license-file
+
+# Pricing Function Mapper
+
+Active-learning mapper for comprehensive car insurance pricing.
+
+## Setup
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -e .
+```
+
+For development tools:
+
+```bash
+pip install -e .[dev]
+pre-commit install
+```
+
+## Run
+
+Default run:
+
+```bash
+python -m pricing_mapper
+```
+
+Or with CLI overrides:
+
+```bash
+python -m pricing_mapper \
+  --budget 260 \
+  --init-n 95 \
+  --batch-size 20 \
+  --pool-size 14000 \
+  --distance-backend knn
+```
+
+Or with config file:
+
+```bash
+python -m pricing_mapper --config config.example.json
+```
+
+Outputs:
+- `comp_car_quotes_advanced.csv` (sampled dataset)
+- `run_metadata.json` (runtime stats, MAE, config, versions)
+- `run_state.json` (checkpoint/resume state)
+
+## Resume
+
+```bash
+python -m pricing_mapper --config config.example.json --resume
+```
+
+## Project Layout
+
+- `pricing_mapper/domain.py`: domain schema + canonicalization
+- `pricing_mapper/encoding.py`: cached feature encoder
+- `pricing_mapper/models.py`: RF ensemble + monotone HGB wrapper
+- `pricing_mapper/active_mapper.py`: active-learning orchestration
+- `pricing_mapper/cli.py`: CLI entrypoint and outputs
+- `pricing_mapper/quote.py`: mock quote function
+- `tests/`: unit + small integration tests
+
+## Quality Checks
+
+```bash
+ruff check .
+black --check .
+mypy pricing_mapper
+python -m pytest -q
+```

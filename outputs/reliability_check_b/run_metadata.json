@@ -1,0 +1,157 @@
+{
+  "stats": {
+    "samples": 45,
+    "budget": 45,
+    "mean": 5325.895777777778,
+    "std": 4298.67672310315,
+    "monotone_enabled": false,
+    "completed_budget": true,
+    "early_stopped": false,
+    "stop_reason": null,
+    "elapsed_seconds": 4.813980749000166,
+    "profile_seconds": {
+      "fit": 1.6370491429997855,
+      "pool_generate": 2.0846376100000725,
+      "predict_pool": 0.2408916050001153,
+      "distance": 0.007061027999952785,
+      "cv_residuals": 5.082699976810545e-05,
+      "local_scoring": 0.1027348670002084,
+      "breakpoint_search": 0.5664154050002708,
+      "proposal_total": 3.916972560999511,
+      "run_total": 4.813980749000166
+    }
+  },
+  "mae_rf": 1131.5699290293041,
+  "monotone": false,
+  "config": {
+    "seed": 42,
+    "budget": 45,
+    "init_n": 20,
+    "batch_size": 5,
+    "pool_size": 1800,
+    "output_dir": "outputs",
+    "run_id": "reliability_check_b",
+    "output_csv": "outputs/reliability_check_b/comp_car_quotes_advanced.csv",
+    "output_metadata_json": "outputs/reliability_check_b/run_metadata.json",
+    "state_path": "outputs/reliability_check_b/run_state.json",
+    "engine_path": "outputs/reliability_check_b/pricing_engine.pkl",
+    "resume": false,
+    "checkpoint_every_batches": 1,
+    "refit_every_batches": 1,
+    "cv_subsample_max": 1200,
+    "use_monotone_if_available": false,
+    "distance_backend": "knn",
+    "acquisition_mix": [
+      0.3,
+      0.25,
+      0.3,
+      0.15
+    ],
+    "breakpoint_vars": [
+      "vehicle_value",
+      "excess",
+      "postcode_risk",
+      "annual_km"
+    ],
+    "rf_n_models": 4,
+    "rf_n_estimators": 80,
+    "rf_n_jobs": 1,
+    "early_stop_patience_batches": 3,
+    "early_stop_min_batches": 4,
+    "early_stop_min_rel_improvement": 0.005,
+    "staged_mapping_enabled": true,
+    "staged_stage1_fraction": 0.4,
+    "staged_focus_jitter_per_anchor": 16,
+    "segment_focus_enabled": true,
+    "segment_constraints": {
+      "claims_5y": {
+        "max": 1
+      },
+      "convictions_5y": {
+        "max": 0
+      },
+      "postcode_risk": {
+        "max": 0.35
+      },
+      "parking": {
+        "in": [
+          "garage",
+          "driveway"
+        ]
+      },
+      "theft_risk": {
+        "max": 0.35
+      }
+    },
+    "segment_target_weight": 0.45,
+    "segment_sigma_weight": 0.25,
+    "segment_min_candidates": 500,
+    "segment_pool_max_tries": 5,
+    "quote_provider": null,
+    "domain_overrides": {
+      "continuous": {},
+      "integers": {},
+      "categorical": {}
+    }
+  },
+  "features": [
+    "driver_age",
+    "postcode_risk",
+    "vehicle_value",
+    "theft_risk",
+    "years_licensed",
+    "vehicle_year",
+    "annual_km",
+    "claims_5y",
+    "convictions_5y",
+    "excess",
+    "usage=private",
+    "usage=commute",
+    "usage=business",
+    "parking=garage",
+    "parking=driveway",
+    "parking=street",
+    "hire_car=none",
+    "hire_car=basic",
+    "hire_car=premium",
+    "windscreen=no",
+    "windscreen=yes",
+    "rating=market",
+    "rating=agreed"
+  ],
+  "python": "3.13.5",
+  "numpy": "2.4.2",
+  "artifacts": {
+    "run_id": "reliability_check_b",
+    "output_csv": "outputs/reliability_check_b/comp_car_quotes_advanced.csv",
+    "output_metadata_json": "outputs/reliability_check_b/run_metadata.json",
+    "state_path": "outputs/reliability_check_b/run_state.json",
+    "engine_path": "outputs/reliability_check_b/pricing_engine.pkl"
+  },
+  "segment": {
+    "enabled": true,
+    "constraints": {
+      "claims_5y": {
+        "max": 1
+      },
+      "convictions_5y": {
+        "max": 0
+      },
+      "postcode_risk": {
+        "max": 0.35
+      },
+      "parking": {
+        "in": [
+          "garage",
+          "driveway"
+        ]
+      },
+      "theft_risk": {
+        "max": 0.35
+      }
+    },
+    "count": 23,
+    "fraction": 0.5111111111111111,
+    "mae_rf": 540.0569107348081
+  }
+}
