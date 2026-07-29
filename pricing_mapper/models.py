@@ -7,7 +7,7 @@ try:
     from sklearn.ensemble import HistGradientBoostingRegressor
 
     HGB_AVAILABLE = True
-except Exception:
+except ImportError:
     HGB_AVAILABLE = False
 
 
@@ -18,7 +18,7 @@ class BootstrappedRF:
         seed: int = 0,
         n_estimators: int = 600,
         n_jobs: int = -1,
-    ):
+    ) -> None:
         self.n_models = n_models
         self.n_estimators = n_estimators
         self.n_jobs = n_jobs
@@ -57,7 +57,7 @@ class MonotoneHGBWrapper:
         learning_rate: float = 0.07,
         max_iter: int = 600,
         min_samples_leaf: int = 20,
-    ):
+    ) -> None:
         if not HGB_AVAILABLE:
             raise RuntimeError("HistGradientBoostingRegressor not available.")
         self.model = HistGradientBoostingRegressor(

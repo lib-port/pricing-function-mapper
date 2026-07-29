@@ -71,10 +71,13 @@ def load_quote_fn(provider: str | None) -> Callable[[dict[str, Any]], float]:
     if not provider:
         return mock_comp_car_quote
 
-    if ":" not in provider:
+    provider = provider.strip()
+    if provider.count(":") != 1:
         raise ValueError("quote_provider must use 'module:function' format")
 
-    mod_name, fn_name = provider.split(":", 1)
+    mod_name, fn_name = (part.strip() for part in provider.split(":", 1))
+    if not mod_name or not fn_name:
+        raise ValueError("quote_provider must use 'module:function' format")
     module = importlib.import_module(mod_name)
     fn = getattr(module, fn_name, None)
     if fn is None or not callable(fn):

@@ -3,7 +3,6 @@ repos:
     rev: v0.14.0
     hooks:
       - id: ruff
-      - id: ruff-format
   - repo: https://github.com/psf/black
     rev: 24.10.0
     hooks:
@@ -13,6 +12,6 @@ repos:
     hooks:
       - id: mypy
         additional_dependencies:
-          - numpy
-          - pandas
-          - scikit-learn
+          - numpy==2.4.2
+          - pandas==3.0.1
+          - scikit-learn==1.8.0

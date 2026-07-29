@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import json
+import math
+from collections.abc import Callable
+from numbers import Integral
 from typing import Any
 
 import numpy as np
@@ -21,12 +24,45 @@ def top_k_desc_idx(arr: np.ndarray, k: int) -> np.ndarray:
     return idx[np.argsort(arr[idx])[::-1]]
 
 
+def allocate_integer_counts(total: int, weights: tuple[float, ...]) -> tuple[int, ...]:
+    """Allocate an exact integer total using the largest-remainder method."""
+    if isinstance(total, bool) or not isinstance(total, Integral) or total < 0:
+        raise ValueError("total must be a non-negative integer")
+    total = int(total)
+    if not weights:
+        raise ValueError("weights cannot be empty")
+
+    weight_array = np.asarray(weights, dtype=float)
+    if not np.all(np.isfinite(weight_array)) or np.any(weight_array < 0):
+        raise ValueError("weights must be finite and non-negative")
+    if not np.isclose(float(weight_array.sum()), 1.0):
+        raise ValueError("weights must sum to 1.0")
+
+    raw = weight_array * total
+    counts = np.floor(raw).astype(int)
+    remaining = total - int(counts.sum())
+    if remaining > 0:
+        fractional = raw - counts
+        order = np.argsort(-fractional, kind="stable")
+        counts[order[:remaining]] += 1
+    return tuple(int(value) for value in counts)
+
+
 def min_dist2_to_train(
     x_pool: np.ndarray,
     x_train: np.ndarray,
-    backend: str = "brute",
+    backend: str = "knn",
     chunk: int = 2000,
 ) -> np.ndarray:
+    if backend not in {"brute", "knn"}:
+        raise ValueError("backend must be one of: brute, knn")
+    if chunk <= 0:
+        raise ValueError("chunk must be > 0")
+    if x_train.shape[0] == 0:
+        raise ValueError("x_train must contain at least one row")
+    if x_pool.shape[0] == 0:
+        return np.empty((0,), dtype=float)
+
     if backend == "knn":
         nn = NearestNeighbors(n_neighbors=1, algorithm="auto")
         nn.fit(x_train)
@@ -61,6 +97,80 @@ def propose_pool(domain: DomainSpec, n: int, rng: np.random.Generator) -> list[d
     return [canonicalize_comp_car_input(x, domain) for x in domain.sample_lhs(n=n, rng=rng)]
 
 
+def propose_segment_pool(
+    domain: DomainSpec,
+    n: int,
+    rng: np.random.Generator,
+    constraints: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Sample candidates directly inside independently constrained ranges."""
+    rows = domain.sample_lhs(n=n, rng=rng)
+
+    years_var = next(var for var in domain.integers if var.name == "years_licensed")
+    years_rule_raw = constraints.get("years_licensed")
+    minimum_years = years_var.low
+    if years_rule_raw is not None:
+        years_rule = years_rule_raw if isinstance(years_rule_raw, dict) else {"eq": years_rule_raw}
+        minimum_value = (
+            years_rule["eq"] if "eq" in years_rule else years_rule.get("min", years_var.low)
+        )
+        minimum_years = math.ceil(float(minimum_value))
+    minimum_driver_age = 16 + minimum_years
+
+    for row in rows:
+        for cont_var in domain.continuous:
+            raw_rule = constraints.get(cont_var.name)
+            adjust_driver_age = cont_var.name == "driver_age" and minimum_driver_age > cont_var.low
+            if raw_rule is None and not adjust_driver_age:
+                continue
+            rule = (
+                raw_rule
+                if isinstance(raw_rule, dict)
+                else ({"eq": raw_rule} if raw_rule is not None else {})
+            )
+            if "eq" in rule:
+                row[cont_var.name] = float(rule["eq"])
+            else:
+                low = max(float(cont_var.low), float(rule.get("min", cont_var.low)))
+                high = min(float(cont_var.high), float(rule.get("max", cont_var.high)))
+                if cont_var.name == "driver_age":
+                    low = max(low, float(minimum_driver_age))
+                row[cont_var.name] = float(rng.uniform(low, high))
+
+        for int_var in domain.integers:
+            raw_rule = constraints.get(int_var.name)
+            if raw_rule is None:
+                continue
+            rule = raw_rule if isinstance(raw_rule, dict) else {"eq": raw_rule}
+            if "eq" in rule:
+                row[int_var.name] = int(rule["eq"])
+            else:
+                low = max(
+                    int_var.low,
+                    math.ceil(float(rule.get("min", int_var.low))),
+                )
+                high = min(
+                    int_var.high,
+                    math.floor(float(rule.get("max", int_var.high))),
+                )
+                if int_var.name == "years_licensed":
+                    high = min(high, max(0, int(float(row["driver_age"])) - 16))
+                row[int_var.name] = int(rng.integers(low, high + 1))
+
+        for cat_var in domain.categorical:
+            raw_rule = constraints.get(cat_var.name)
+            if raw_rule is None:
+                continue
+            rule = raw_rule if isinstance(raw_rule, dict) else {"eq": raw_rule}
+            if "eq" in rule:
+                row[cat_var.name] = rule["eq"]
+            elif "in" in rule:
+                levels = rule["in"]
+                row[cat_var.name] = levels[int(rng.integers(0, len(levels)))]
+
+    return [canonicalize_comp_car_input(row, domain) for row in rows]
+
+
 def jitter_around(
     x0: dict[str, Any],
     domain: DomainSpec,
@@ -84,11 +194,12 @@ def jitter_around(
             span = iv.high - iv.low
             z = (int(x[iv.name]) - iv.low) / max(1, span)
             z2 = float(np.clip(z + rng.normal(0, int_sigma), 0.0, 1.0))
-            x[iv.name] = int(round(iv.low + z2 * span))
+            x[iv.name] = round(iv.low + z2 * span)
 
         for cv in domain.categorical:
             if rng.uniform() < p_cat_flip:
-                x[cv.name] = rng.choice(cv.levels)
+                level_index = int(rng.integers(0, len(cv.levels)))
+                x[cv.name] = cv.levels[level_index]
 
         xs.append(canonicalize_comp_car_input(x, domain))
     return xs
@@ -99,11 +210,18 @@ def binary_search_breakpoint(
     var_name: str,
     low: float,
     high: float,
-    predict_fn,
+    predict_fn: Callable[[list[dict[str, Any]]], np.ndarray],
     domain: DomainSpec | None = None,
     max_queries: int = 6,
     threshold: float = 40.0,
 ) -> list[dict[str, Any]]:
+    if max_queries < 0:
+        raise ValueError("max_queries must be >= 0")
+    if threshold < 0:
+        raise ValueError("threshold must be >= 0")
+    if high < low:
+        raise ValueError("high must be >= low")
+
     x_low = dict(x_base)
     x_high = dict(x_base)
     x_low[var_name] = low
@@ -130,6 +248,9 @@ def binary_search_breakpoint(
         pa[var_name] = a
         pm[var_name] = mid
         pb[var_name] = b
+        pa = canonicalize_comp_car_input(pa, domain)
+        pm = canonicalize_comp_car_input(pm, domain)
+        pb = canonicalize_comp_car_input(pb, domain)
         pred_ab = predict_fn([pa, pm, pb])
 
         left = abs(float(pred_ab[1] - pred_ab[0]))
@@ -143,4 +264,6 @@ def binary_search_breakpoint(
 
 
 def summarize_metrics(y: np.ndarray) -> tuple[float, float]:
+    if y.size == 0:
+        raise ValueError("Cannot summarize an empty array")
     return float(y.mean()), float(y.std())

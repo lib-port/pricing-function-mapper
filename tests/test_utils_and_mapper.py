@@ -63,6 +63,10 @@ class UtilsAndMapperTests(unittest.TestCase):
             state_path="/tmp/state.json",
             checkpoint_every_batches=0,
             refit_every_batches=1,
+            use_monotone_if_available=False,
+            rf_n_models=2,
+            rf_n_estimators=30,
+            rf_n_jobs=1,
         )
         mapper = ActiveQuoteMapper(
             domain=build_comp_car_domain(),
@@ -88,6 +92,7 @@ class UtilsAndMapperTests(unittest.TestCase):
             use_monotone_if_available=False,
             rf_n_models=2,
             rf_n_estimators=40,
+            rf_n_jobs=1,
         )
         mapper = ActiveQuoteMapper(
             domain=build_comp_car_domain(),

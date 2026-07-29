@@ -15,8 +15,10 @@ This project incrementally samples the input space, trains surrogate models, and
 
 - Active-learning query strategy with uncertainty, boundary, local-error, and breakpoint components.
 - Optional staged mapping and early stopping to reduce query volume.
-- Segment-focused acquisition for targeted analysis (e.g., low-risk/high-premium cohorts).
-- Reproducible artifacts: dataset, metadata, checkpoint state, and serialized pricing engine.
+- Segment-focused acquisition with direct constrained sampling for targeted analysis
+  (e.g., low-risk/high-premium cohorts).
+- Validated, collision-resistant run artifacts: dataset, metadata, optional checkpoint state,
+  and a serialized pricing engine fitted on every final sample.
 
 ## Purpose
 
@@ -42,7 +44,8 @@ For each run:
    - error-driven local exploration
    - breakpoint probing
 5. Repeat until budget is reached or early-stop criteria are met.
-6. Write artifacts (dataset, metadata, state checkpoint, pricing engine).
+6. Refit the export models on every collected sample.
+7. Write artifacts (dataset, metadata, optional state checkpoint, pricing engine).
 
 ## Repository Structure
 
@@ -55,6 +58,7 @@ For each run:
 - `pricing_mapper/engine.py`: serialized pricing engine artifact + inference helpers.
 - `pricing_mapper/api.py`: optional FastAPI serving interface for engine inference.
 - `pricing_mapper/benchmark.py`: benchmark presets and result writer.
+- `comp_car_active_mapper_advanced.py`: backwards-compatible executable CLI wrapper.
 - `config.example.json`: baseline configuration template.
 - `config.segment.example.json`: segment-focused preset (low-risk/high-premium).
 - `scripts/quality.sh` and `scripts/smoke.sh`: local quality and smoke helpers.
@@ -63,7 +67,8 @@ For each run:
 ## Requirements
 
 - Python 3.11+
-- `numpy`, `pandas`, `scikit-learn`
+- Runtime dependencies from `pyproject.toml`/`requirements.txt`: `numpy`, `pandas`,
+  and `scikit-learn`
 
 ## Local Setup
 
@@ -88,12 +93,15 @@ Default run:
 python -m pricing_mapper
 ```
 
-This creates a run folder under `outputs/<run_id>/` with:
+This creates a uniquely named run folder under `outputs/<run_id>/` with:
 
 - `comp_car_quotes_advanced.csv`
 - `run_metadata.json`
-- `run_state.json`
 - `pricing_engine.pkl`
+
+With checkpointing enabled (the default), it also creates `run_state.json`. Setting
+`checkpoint_every_batches` to `0` disables checkpoint creation for a new run.
+Existing run artifacts are never overwritten unless `--resume` is used.
 
 ## CLI Usage
 
@@ -102,6 +110,8 @@ This creates a run folder under `outputs/<run_id>/` with:
 ```bash
 python -m pricing_mapper --config config.example.json --dry-run
 ```
+
+Dry-run validation also resolves the configured quote-provider callable.
 
 ### Run with explicit overrides
 
@@ -147,14 +157,38 @@ python -m pricing_mapper \
 
 ### Resume a run
 
+Start with an explicit run ID:
+
 ```bash
-python -m pricing_mapper --config config.example.json --resume
+python -m pricing_mapper --config config.example.json --run-id my_run
+```
+
+Then use the same ID and a budget greater than or equal to the checkpoint's sample count.
+For example, to extend `my_run`:
+
+```bash
+python -m pricing_mapper \
+  --config config.example.json \
+  --run-id my_run \
+  --budget 320 \
+  --resume
 ```
 
 Resume safety checks:
 
-- Resume now validates that checkpointed state is compatible with the current run config.
-- At minimum, `quote_provider` and `domain_overrides` must match the saved state.
+- `--resume` fails if the resolved state file does not exist; a generated `run_id` cannot
+  identify an earlier run.
+- Checkpoint structure, row/value/cache consistency, RNG state, and numeric values are
+  validated before any state is applied.
+- `seed`, `quote_provider`, `domain_overrides`, monotone setting, and RF model size must
+  match the saved state.
+- The resolved domain snapshot must also match, preventing silent resume drift when dynamic
+  bounds (such as the current vehicle year) change.
+- Batch/early-stop counters and RF/proposal RNG state are restored so, with unchanged mapping
+  settings, continuing a completed lower-budget run matches the equivalent uninterrupted run.
+- Resuming an already early-stopped checkpoint does not silently add samples; set
+  `early_stop_patience_batches` to `0` if you intentionally want to continue it.
+- A resumed run always writes its final state, even when periodic checkpointing is disabled.
 
 ### Benchmark presets
 
@@ -170,6 +204,9 @@ This writes:
 - `benchmark_results.json`
 - `benchmark_results.csv`
 
+`--benchmark-output` must end in `.json`. Presets run independently: resume is disabled and
+benchmark runs do not create mapper checkpoints or engine artifacts.
+
 ### Use your own quote provider
 
 ```bash
@@ -179,7 +216,10 @@ python -m pricing_mapper --quote-provider my_module.my_quotes:quote
 Provider contract:
 
 - Callable signature: `quote(row: dict[str, Any]) -> float`
+- Return value: finite and non-negative
 - Must be deterministic for reproducibility unless intentionally stochastic.
+- Custom categorical levels require a custom provider that supports those values; the
+  default provider rejects unsupported categorical overrides during config validation.
 
 ### Price a single row from a JSON string
 
@@ -188,6 +228,11 @@ python -m pricing_mapper \
   --engine-path outputs/<run_id>/pricing_engine.pkl \
   --price-row '{"driver_age":40,"years_licensed":20,"vehicle_year":2022,"vehicle_value":35000,"annual_km":10000,"claims_5y":0,"convictions_5y":0,"postcode_risk":0.2,"theft_risk":0.2,"excess":700,"usage":"private","parking":"garage","hire_car":"none","windscreen":"no","rating":"market"}'
 ```
+
+Inference rows must contain exactly the 15 configured input fields. Missing/unknown fields,
+non-finite numeric values, and categorical values outside the engine's domain are rejected.
+Numeric values are canonicalized to the saved domain; integer inputs are rounded and all
+numeric inputs are clipped to their configured bounds.
 
 ### Price a single row from a JSON file
 
@@ -231,6 +276,9 @@ Endpoints:
 - `POST /price` (JSON object row)
 - `POST /price-batch` (`{"rows":[...]}`)
 
+The four pricing modes (`--price-row`, `--price-row-json`, `--price-input-csv`, and
+`--serve-api`) are mutually exclusive.
+
 ## Configuration
 
 Use `config.example.json` as a template. Key options include:
@@ -251,8 +299,14 @@ Use `config.example.json` as a template. Key options include:
 Validation behavior:
 
 - Unknown keys in `domain_overrides` are rejected (no silent ignore).
-- `rf_n_models` and `rf_n_estimators` must be `> 0`; `rf_n_jobs` cannot be `0`.
-- `segment_constraints` validate variable names and operator compatibility (`min`/`max`/`eq`/`in`).
+- Bounds and weights must be finite; integer settings must actually be integers.
+- `rf_n_models` and `rf_n_estimators` must be `> 0`; `rf_n_jobs` must be `-1` or positive.
+- `breakpoint_vars` must be known numeric variables without duplicates.
+- `segment_constraints` validate names, values, domain intersections, categorical levels,
+  cross-field feasibility, and operator compatibility (`min`/`max`/`eq`/`in`).
+- Enabling segment focus requires at least one segment constraint.
+- Artifact filenames must be non-empty and distinct. The four artifact settings are treated
+  as filenames and placed under `output_dir/run_id/`.
 
 ## Output Artifacts
 
@@ -272,14 +326,19 @@ Includes:
 - resolved config
 - feature list
 - artifact paths
+- Python, NumPy, pandas, and scikit-learn versions
+- whether a checkpoint state file was written
 
 ### State JSON
 
-Checkpoint state used for resume support.
+Checkpoint state used for resume support. It is present when checkpointing is enabled or a
+run is resumed.
 
 - versioned schema
 - atomic writes
 - migration support for older schema versions
+- model-fit/RNG and batch/early-stop state for deterministic continuation
+- resolved domain snapshot
 
 ### Pricing Engine (`pricing_engine.pkl`)
 
@@ -289,6 +348,10 @@ Serialized inference artifact containing:
 - fitted surrogate model(s)
 - feature ordering metadata
 - run config snapshot
+
+The engine uses Python pickle. Load only engine files produced by a trusted source; loading
+an untrusted pickle can execute arbitrary code. Engine loading also validates schema,
+configuration, model fit state, and feature metadata before inference.
 
 ## Quality and Testing
 
@@ -322,9 +385,9 @@ The following creates an isolated Debian VM suitable for running this project.
 - Vagrant
 - VirtualBox (or another Vagrant provider)
 
-### 2. Create `Vagrantfile`
+### 2. Review the included `Vagrantfile`
 
-In the project root:
+The repository's `Vagrantfile` contains:
 
 ```ruby
 Vagrant.configure("2") do |config|
@@ -336,7 +399,7 @@ Vagrant.configure("2") do |config|
     vb.cpus = 2
   end
 
-  config.vm.synced_folder ".", "/vagrant", type: "virtualbox"
+  config.vm.synced_folder ".", "/vagrant"
 
   config.vm.provision "shell", inline: <<-SHELL
     set -e

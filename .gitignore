@@ -33,6 +33,9 @@ pip-wheel-metadata/
 
 # Local runtime artifacts
 outputs/
+local_smoke_outputs/
+benchmark_results.json
+benchmark_results.csv
 
 # Local machine / editor state
 .vagrant/
@@ -40,3 +43,5 @@ outputs/
 .idea/
 .DS_Store
 Thumbs.db
+
+.codex/

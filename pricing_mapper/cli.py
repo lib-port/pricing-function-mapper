@@ -8,10 +8,12 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+import pandas as pd
+import sklearn
 
 from pricing_mapper.active_mapper import ActiveQuoteMapper
 from pricing_mapper.api import serve_api
-from pricing_mapper.artifacts import ensure_parent_dirs, resolve_run_paths
+from pricing_mapper.artifacts import ensure_parent_dirs, existing_artifacts, resolve_run_paths
 from pricing_mapper.benchmark import run_benchmark
 from pricing_mapper.config import MapperConfig, dump_config, load_config, validate_config
 from pricing_mapper.domain import build_comp_car_domain
@@ -20,6 +22,7 @@ from pricing_mapper.engine import PricingEngine, load_row_json, load_rows_csv, w
 from pricing_mapper.quote import load_quote_fn
 
 LOG_FORMAT = "%(asctime)s | %(levelname)s | %(name)s | %(message)s"
+LOG_LEVELS = ("CRITICAL", "ERROR", "WARNING", "INFO", "DEBUG")
 
 
 def setup_logging(level: str) -> None:
@@ -29,10 +32,23 @@ def setup_logging(level: str) -> None:
     )
 
 
+def _port_number(value: str) -> int:
+    port = int(value)
+    if not 1 <= port <= 65535:
+        raise argparse.ArgumentTypeError("port must be between 1 and 65535")
+    return port
+
+
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Active pricing function mapper")
     p.add_argument("--config", type=str, default=None, help="Path to JSON config file")
-    p.add_argument("--log-level", type=str, default="INFO", help="Logging level")
+    p.add_argument(
+        "--log-level",
+        type=str.upper,
+        choices=LOG_LEVELS,
+        default="INFO",
+        help="Logging level",
+    )
 
     p.add_argument("--budget", type=int)
     p.add_argument("--init-n", type=int)
@@ -72,20 +88,38 @@ def parse_args() -> argparse.Namespace:
     )
     p.add_argument("--quote-provider", type=str)
     p.add_argument("--disable-monotone", action="store_true")
-    p.add_argument("--price-row", type=str, help="JSON row string for single premium prediction")
-    p.add_argument("--price-row-json", type=str, help="Path to JSON row file for prediction")
-    p.add_argument("--price-input-csv", type=str, help="CSV path of rows to score")
+    pricing_modes = p.add_mutually_exclusive_group()
+    pricing_modes.add_argument(
+        "--price-row",
+        type=str,
+        help="JSON row string for single premium prediction",
+    )
+    pricing_modes.add_argument(
+        "--price-row-json",
+        type=str,
+        help="Path to JSON row file for prediction",
+    )
+    pricing_modes.add_argument(
+        "--price-input-csv",
+        type=str,
+        help="CSV path of rows to score",
+    )
     p.add_argument("--price-output-csv", type=str, help="Output CSV path for scored batch")
-    p.add_argument("--serve-api", action="store_true", help="Serve pricing engine API")
+    pricing_modes.add_argument(
+        "--serve-api",
+        action="store_true",
+        help="Serve pricing engine API",
+    )
     p.add_argument("--host", type=str, default="127.0.0.1", help="API host for --serve-api")
-    p.add_argument("--port", type=int, default=8000, help="API port for --serve-api")
+    p.add_argument("--port", type=_port_number, default=8000, help="API port for --serve-api")
 
-    p.add_argument(
+    run_modes = p.add_mutually_exclusive_group()
+    run_modes.add_argument(
         "--dry-run",
         action="store_true",
         help="Validate config and print resolved settings",
     )
-    p.add_argument("--benchmark", action="store_true", help="Run benchmark presets")
+    run_modes.add_argument("--benchmark", action="store_true", help="Run benchmark presets")
     p.add_argument(
         "--benchmark-output",
         type=str,
@@ -157,7 +191,14 @@ def apply_cli_overrides(cfg: MapperConfig, args: argparse.Namespace) -> MapperCo
 
 
 def _run_single(cfg: MapperConfig, logger: logging.Logger) -> int:
+    validate_config(cfg)
     cfg = resolve_run_paths(cfg)
+    existing = existing_artifacts(cfg)
+    if existing and not cfg.resume:
+        formatted = ", ".join(str(path) for path in existing)
+        raise FileExistsError(
+            f"Refusing to overwrite existing run artifacts without --resume: {formatted}"
+        )
     ensure_parent_dirs(cfg)
 
     quote_fn = load_quote_fn(cfg.quote_provider)
@@ -170,7 +211,9 @@ def _run_single(cfg: MapperConfig, logger: logging.Logger) -> int:
     mae_rf = float(np.mean(np.abs(mu_rf - df["premium"].to_numpy(dtype=float))))
 
     output_csv = Path(cfg.output_csv)
-    df.to_csv(output_csv, index=False)
+    output_csv_tmp = output_csv.with_suffix(output_csv.suffix + ".tmp")
+    df.to_csv(output_csv_tmp, index=False)
+    output_csv_tmp.replace(output_csv)
 
     metadata: dict[str, Any] = {
         "stats": stats.__dict__,
@@ -180,11 +223,14 @@ def _run_single(cfg: MapperConfig, logger: logging.Logger) -> int:
         "features": cols,
         "python": platform.python_version(),
         "numpy": np.__version__,
+        "pandas": pd.__version__,
+        "scikit_learn": sklearn.__version__,
         "artifacts": {
             "run_id": cfg.run_id,
             "output_csv": str(output_csv),
             "output_metadata_json": cfg.output_metadata_json,
             "state_path": cfg.state_path,
+            "state_written": Path(cfg.state_path).is_file(),
             "engine_path": cfg.engine_path,
         },
     }
@@ -224,9 +270,6 @@ def _run_single(cfg: MapperConfig, logger: logging.Logger) -> int:
                     np.mean(np.abs(mu_m[seg_mask] - y_true[seg_mask]))
                 )
 
-    output_meta = Path(cfg.output_metadata_json)
-    output_meta.write_text(json.dumps(metadata, indent=2))
-
     engine = PricingEngine.from_mapper(
         domain=domain,
         rf=mapper.rf,
@@ -236,6 +279,11 @@ def _run_single(cfg: MapperConfig, logger: logging.Logger) -> int:
     )
     engine.save(cfg.engine_path)
 
+    output_meta = Path(cfg.output_metadata_json)
+    output_meta_tmp = output_meta.with_suffix(output_meta.suffix + ".tmp")
+    output_meta_tmp.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
+    output_meta_tmp.replace(output_meta)
+
     logger.info("Saved quotes to %s", output_csv)
     logger.info("Saved metadata to %s", output_meta)
     logger.info("Saved pricing engine to %s", cfg.engine_path)
@@ -243,23 +291,34 @@ def _run_single(cfg: MapperConfig, logger: logging.Logger) -> int:
 
 
 def _run_pricing_mode(args: argparse.Namespace, logger: logging.Logger) -> int:
+    modes = [
+        args.price_row is not None,
+        args.price_row_json is not None,
+        args.price_input_csv is not None,
+        bool(args.serve_api),
+    ]
+    if sum(modes) != 1:
+        raise ValueError(
+            "Choose exactly one of --price-row, --price-row-json, "
+            "--price-input-csv, or --serve-api"
+        )
+    if args.price_output_csv is not None and args.price_input_csv is None:
+        raise ValueError("--price-output-csv requires --price-input-csv")
+
+    for option in ("price_row", "price_row_json", "price_input_csv", "price_output_csv"):
+        value = getattr(args, option)
+        if value is not None and (not isinstance(value, str) or not value.strip()):
+            raise ValueError(f"--{option.replace('_', '-')} cannot be empty")
+
     engine_path = args.engine_path
-    if not engine_path:
+    if not isinstance(engine_path, str) or not engine_path.strip():
         raise ValueError("engine_path is required for pricing mode")
-    engine = PricingEngine.load(engine_path)
 
     if args.serve_api:
         serve_api(engine_path=engine_path, host=args.host, port=args.port)
         return 0
 
-    has_single = bool(args.price_row or args.price_row_json)
-    has_batch = bool(args.price_input_csv)
-    if has_single and has_batch:
-        raise ValueError("Use either single-row or batch pricing mode, not both")
-    if not has_single and not has_batch:
-        raise ValueError(
-            "Pricing mode requires --price-row, --price-row-json, or --price-input-csv"
-        )
+    engine = PricingEngine.load(engine_path)
 
     if args.price_row_json:
         row = load_row_json(args.price_row_json)
@@ -277,35 +336,37 @@ def _run_pricing_mode(args: argparse.Namespace, logger: logging.Logger) -> int:
         print(json.dumps(payload, indent=2))
         return 0
 
-    rows = load_rows_csv(args.price_input_csv)
+    input_csv = args.price_input_csv
+    if input_csv is None:
+        raise ValueError("--price-input-csv is required for batch pricing")
+    rows = load_rows_csv(input_csv)
     scored = engine.predict_rows_with_inputs(rows)
-    out_csv = args.price_output_csv or str(
-        Path(args.price_input_csv).with_name("priced_output.csv")
-    )
+    out_csv = args.price_output_csv or str(Path(input_csv).with_name("priced_output.csv"))
     write_rows_csv(out_csv, scored)
     logger.info("Scored %d rows", len(scored))
     logger.info("Saved scored output to %s", out_csv)
     return 0
 
 
-def run_cli() -> int:
-    args = parse_args()
-    setup_logging(args.log_level)
-    logger = logging.getLogger("pricing_mapper")
-
-    pricing_mode = bool(
-        args.price_row
-        or args.price_row_json
-        or args.price_input_csv
-        or args.serve_api
+def _dispatch(args: argparse.Namespace, logger: logging.Logger) -> int:
+    pricing_mode = (
+        args.price_row is not None
+        or args.price_row_json is not None
+        or args.price_input_csv is not None
+        or bool(args.serve_api)
     )
     if pricing_mode:
+        if args.dry_run or args.benchmark:
+            raise ValueError("Pricing modes cannot be combined with --dry-run or --benchmark")
         return _run_pricing_mode(args, logger)
+    if args.price_output_csv is not None:
+        raise ValueError("--price-output-csv requires --price-input-csv")
 
     cfg = load_config(args.config)
     cfg = apply_cli_overrides(cfg, args)
 
     if args.dry_run:
+        load_quote_fn(cfg.quote_provider)
         resolved = resolve_run_paths(cfg)
         payload = dump_config(resolved)
         logger.info("Dry-run successful. Resolved config follows.")
@@ -313,8 +374,7 @@ def run_cli() -> int:
         return 0
 
     if args.benchmark:
-        resolved = resolve_run_paths(cfg)
-        payload = run_benchmark(resolved, args.benchmark_output)
+        payload = run_benchmark(cfg, args.benchmark_output)
         results = payload.get("results")
         n_results = len(results) if isinstance(results, list) else 0
         logger.info("Benchmark completed with %d presets", n_results)
@@ -322,6 +382,18 @@ def run_cli() -> int:
         return 0
 
     return _run_single(cfg, logger)
+
+
+def run_cli() -> int:
+    args = parse_args()
+    setup_logging(args.log_level)
+    logger = logging.getLogger("pricing_mapper")
+    try:
+        return _dispatch(args, logger)
+    except (ImportError, OSError, RuntimeError, ValueError) as exc:
+        logger.error("%s", exc)
+        logger.debug("CLI failure details", exc_info=True)
+        return 2
 
 
 if __name__ == "__main__":

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import csv
 import json
 from dataclasses import replace
 from pathlib import Path
@@ -8,8 +9,7 @@ from time import perf_counter
 import numpy as np
 
 from pricing_mapper.active_mapper import ActiveQuoteMapper
-from pricing_mapper.artifacts import ensure_parent_dirs, resolve_run_paths
-from pricing_mapper.config import MapperConfig, dump_config
+from pricing_mapper.config import MapperConfig, dump_config, validate_config
 from pricing_mapper.domain import build_comp_car_domain
 from pricing_mapper.encoding import encode_features
 from pricing_mapper.quote import load_quote_fn
@@ -40,8 +40,16 @@ BENCHMARK_PRESETS: list[dict[str, str | int]] = [
 
 
 def run_benchmark(cfg: MapperConfig, output_json: str) -> dict[str, object]:
+    """Run isolated benchmark presets and write JSON and CSV summaries."""
+    validate_config(cfg)
+    if not output_json or not output_json.strip():
+        raise ValueError("benchmark output path cannot be empty")
+
     quote_fn = load_quote_fn(cfg.quote_provider)
     rows: list[dict[str, object]] = []
+    out = Path(output_json)
+    if out.suffix.lower() != ".json":
+        raise ValueError("benchmark output path must end in .json")
 
     for preset in BENCHMARK_PRESETS:
         run_cfg = replace(
@@ -50,9 +58,9 @@ def run_benchmark(cfg: MapperConfig, output_json: str) -> dict[str, object]:
             rf_n_models=int(preset["rf_n_models"]),
             rf_n_estimators=int(preset["rf_n_estimators"]),
             refit_every_batches=int(preset["refit_every_batches"]),
+            resume=False,
+            checkpoint_every_batches=0,
         )
-        run_cfg = resolve_run_paths(run_cfg)
-        ensure_parent_dirs(run_cfg)
 
         t0 = perf_counter()
         domain = build_comp_car_domain(run_cfg.domain_overrides)
@@ -82,16 +90,19 @@ def run_benchmark(cfg: MapperConfig, output_json: str) -> dict[str, object]:
         "results": rows,
     }
 
-    out = Path(output_json)
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(json.dumps(payload, indent=2))
+    json_tmp = out.with_suffix(out.suffix + ".tmp")
+    json_tmp.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    json_tmp.replace(out)
 
     csv_path = out.with_suffix(".csv")
-    if rows:
-        headers = list(rows[0].keys())
-        lines = [",".join(headers)]
-        for row in rows:
-            lines.append(",".join(str(row[h]) for h in headers))
-        csv_path.write_text("\n".join(lines) + "\n")
+    csv_tmp = csv_path.with_suffix(csv_path.suffix + ".tmp")
+    with csv_tmp.open("w", encoding="utf-8", newline="") as csv_file:
+        headers = list(rows[0].keys()) if rows else []
+        writer = csv.DictWriter(csv_file, fieldnames=headers)
+        if headers:
+            writer.writeheader()
+            writer.writerows(rows)
+    csv_tmp.replace(csv_path)
 
     return payload

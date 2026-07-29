@@ -1,2 +1,0 @@
-[console_scripts]
-pricing-mapper = pricing_mapper.cli:run_cli

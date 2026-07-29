@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Any
+from weakref import ReferenceType, ref
 
 import numpy as np
 
@@ -8,9 +9,7 @@ from pricing_mapper.domain import DomainSpec
 
 
 class FeatureEncoder:
-    def __init__(self, domain: DomainSpec):
-        self.domain = domain
-
+    def __init__(self, domain: DomainSpec) -> None:
         self.cont_names = [v.name for v in domain.continuous]
         self.cont_low = np.asarray([v.low for v in domain.continuous], dtype=float)
         self.cont_inv_span = np.asarray(
@@ -34,7 +33,7 @@ class FeatureEncoder:
         cols.extend(self.int_names)
         for cv_name, lvls in zip(self.cat_names, self.cat_levels, strict=True):
             cols.extend([f"{cv_name}={lvl}" for lvl in lvls])
-        self.cols = cols
+        self.cols = tuple(cols)
 
     def encode(self, rows: list[dict[str, Any]]) -> np.ndarray:
         n = len(rows)
@@ -62,7 +61,16 @@ class FeatureEncoder:
                 self.cat_maps,
                 strict=True,
             ):
-                idx = np.fromiter((level_to_idx[x[name]] for x in rows), dtype=np.intp, count=n)
+                try:
+                    idx = np.fromiter(
+                        (level_to_idx[x[name]] for x in rows),
+                        dtype=np.intp,
+                        count=n,
+                    )
+                except KeyError as exc:
+                    raise ValueError(
+                        f"Unknown or missing categorical value for '{name}': {exc}"
+                    ) from exc
                 one_hot = np.zeros((n, len(lvls)), dtype=float)
                 one_hot[row_idx, idx] = 1.0
                 parts.append(one_hot)
@@ -72,18 +80,29 @@ class FeatureEncoder:
         return np.concatenate(parts, axis=1)
 
 
-_ENCODER_CACHE: dict[int, FeatureEncoder] = {}
+_ENCODER_CACHE: dict[int, tuple[ReferenceType[DomainSpec], FeatureEncoder]] = {}
 
 
 def get_encoder(domain: DomainSpec) -> FeatureEncoder:
     key = id(domain)
-    encoder = _ENCODER_CACHE.get(key)
-    if encoder is None:
-        encoder = FeatureEncoder(domain)
-        _ENCODER_CACHE[key] = encoder
+    cached = _ENCODER_CACHE.get(key)
+    if cached is not None and cached[0]() is domain:
+        return cached[1]
+
+    def remove_cached_encoder(
+        domain_ref: ReferenceType[DomainSpec],
+        cache_key: int = key,
+    ) -> None:
+        current = _ENCODER_CACHE.get(cache_key)
+        if current is not None and current[0] is domain_ref:
+            _ENCODER_CACHE.pop(cache_key, None)
+
+    encoder = FeatureEncoder(domain)
+    domain_ref = ref(domain, remove_cached_encoder)
+    _ENCODER_CACHE[key] = (domain_ref, encoder)
     return encoder
 
 
 def encode_features(domain: DomainSpec, rows: list[dict[str, Any]]) -> tuple[np.ndarray, list[str]]:
     encoder = get_encoder(domain)
-    return encoder.encode(rows), encoder.cols
+    return encoder.encode(rows), list(encoder.cols)

@@ -42,12 +42,12 @@ class DomainTests(unittest.TestCase):
                 "categorical": {"usage": ["private", "business"]},
             }
         )
-        c = [v for v in domain.continuous if v.name == "vehicle_value"][0]
-        i = [v for v in domain.integers if v.name == "excess"][0]
-        k = [v for v in domain.categorical if v.name == "usage"][0]
+        c = next(v for v in domain.continuous if v.name == "vehicle_value")
+        i = next(v for v in domain.integers if v.name == "excess")
+        k = next(v for v in domain.categorical if v.name == "usage")
         self.assertEqual((c.low, c.high), (5000.0, 100000.0))
         self.assertEqual((i.low, i.high), (100, 3000))
-        self.assertEqual(k.levels, ["private", "business"])
+        self.assertEqual(k.levels, ("private", "business"))
 
     def test_canonicalize_respects_domain_overrides(self) -> None:
         domain = build_comp_car_domain(
