@@ -1,0 +1,57 @@
+config_version = 1
+
+[sampling]
+mapping_budget = 10
+initial_size = 6
+batch_size = 2
+candidate_pool_size = 30
+seed = 17
+strategy = "active"
+
+[sampling.acquisition]
+greedy_diversity_weight = 0.50
+focused_fraction = 0.30
+
+[sampling.acquisition.weights]
+uncertainty = 0.10
+residual = 0.05
+breakpoint = 0.20
+diversity = 0.65
+
+[model]
+search_iterations = 1
+hgb_max_iter = 20
+extra_trees_estimators = 20
+committee_size = 2
+committee_estimators = 10
+n_jobs = 1
+max_p95_latency_ms = 1000.0
+latency_repetitions = 5
+
+[model.early_stopping]
+patience_batches = 0
+minimum_batches = 2
+minimum_relative_improvement = 0.01
+confidence_level = 0.90
+
+[evaluation]
+evaluation_budget = 9
+validation_fraction = 0.40
+calibration_fraction = 0.30
+audit_fraction = 0.30
+conformal_coverage = 0.90
+minimum_audit_coverage = 0.0
+maximum_audit_coverage = 1.0
+bootstrap_iterations = 20
+bootstrap_confidence = 0.95
+
+[provider]
+max_retries = 0
+initial_backoff_seconds = 0.0
+maximum_backoff_seconds = 0.0
+concurrency = 1
+
+[artifact]
+output_dir = "outputs"
+state_dir_name = ".runs"
+model_card_title = "Smoke Test Model"

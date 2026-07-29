@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "captured_at": "2026-07-29",
+  "latency_repetitions": 100,
+  "note": "Initial v1 five-seed reference; refresh through the documented benchmark on GitHub-hosted Ubuntu hardware.",
+  "summary": {
+    "active": {
+      "median_p95_latency_ms": 1.769143
+    }
+  }
+}

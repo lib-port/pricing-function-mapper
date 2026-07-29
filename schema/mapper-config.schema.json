@@ -1,0 +1,391 @@
+{
+  "$defs": {
+    "AcquisitionConfig": {
+      "additionalProperties": false,
+      "description": "Weights for pluggable active-acquisition score components.",
+      "properties": {
+        "focused_fraction": {
+          "default": 0.3,
+          "exclusiveMinimum": 0.0,
+          "maximum": 1.0,
+          "title": "Focused Fraction",
+          "type": "number"
+        },
+        "greedy_diversity_weight": {
+          "default": 0.5,
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Greedy Diversity Weight",
+          "type": "number"
+        },
+        "weights": {
+          "additionalProperties": {
+            "type": "number"
+          },
+          "title": "Weights",
+          "type": "object"
+        }
+      },
+      "title": "AcquisitionConfig",
+      "type": "object"
+    },
+    "ArtifactConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "model_card_title": {
+          "default": "Comprehensive Car Insurance Surrogate",
+          "title": "Model Card Title",
+          "type": "string"
+        },
+        "output_dir": {
+          "default": "outputs",
+          "title": "Output Dir",
+          "type": "string"
+        },
+        "state_dir_name": {
+          "default": ".runs",
+          "title": "State Dir Name",
+          "type": "string"
+        }
+      },
+      "title": "ArtifactConfig",
+      "type": "object"
+    },
+    "BoundsConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "high": {
+          "title": "High",
+          "type": "number"
+        },
+        "low": {
+          "title": "Low",
+          "type": "number"
+        }
+      },
+      "required": [
+        "low",
+        "high"
+      ],
+      "title": "BoundsConfig",
+      "type": "object"
+    },
+    "DomainConfig": {
+      "additionalProperties": false,
+      "description": "Optional narrowing of the supported v1 numeric domain.",
+      "properties": {
+        "bounds": {
+          "additionalProperties": {
+            "$ref": "#/$defs/BoundsConfig"
+          },
+          "title": "Bounds",
+          "type": "object"
+        }
+      },
+      "title": "DomainConfig",
+      "type": "object"
+    },
+    "EarlyStoppingConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "confidence_level": {
+          "default": 0.9,
+          "exclusiveMaximum": 1.0,
+          "exclusiveMinimum": 0.5,
+          "title": "Confidence Level",
+          "type": "number"
+        },
+        "minimum_batches": {
+          "default": 3,
+          "minimum": 1,
+          "title": "Minimum Batches",
+          "type": "integer"
+        },
+        "minimum_relative_improvement": {
+          "default": 0.005,
+          "exclusiveMaximum": 1.0,
+          "minimum": 0.0,
+          "title": "Minimum Relative Improvement",
+          "type": "number"
+        },
+        "patience_batches": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Patience Batches",
+          "type": "integer"
+        }
+      },
+      "title": "EarlyStoppingConfig",
+      "type": "object"
+    },
+    "EvaluationConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "audit_fraction": {
+          "default": 0.3,
+          "exclusiveMaximum": 1.0,
+          "exclusiveMinimum": 0.0,
+          "title": "Audit Fraction",
+          "type": "number"
+        },
+        "bootstrap_confidence": {
+          "default": 0.95,
+          "exclusiveMaximum": 1.0,
+          "exclusiveMinimum": 0.5,
+          "title": "Bootstrap Confidence",
+          "type": "number"
+        },
+        "bootstrap_iterations": {
+          "default": 300,
+          "maximum": 100000,
+          "minimum": 0,
+          "title": "Bootstrap Iterations",
+          "type": "integer"
+        },
+        "calibration_fraction": {
+          "default": 0.3,
+          "exclusiveMaximum": 1.0,
+          "exclusiveMinimum": 0.0,
+          "title": "Calibration Fraction",
+          "type": "number"
+        },
+        "conformal_coverage": {
+          "default": 0.9,
+          "exclusiveMaximum": 1.0,
+          "exclusiveMinimum": 0.5,
+          "title": "Conformal Coverage",
+          "type": "number"
+        },
+        "evaluation_budget": {
+          "default": 120,
+          "minimum": 3,
+          "title": "Evaluation Budget",
+          "type": "integer"
+        },
+        "maximum_audit_coverage": {
+          "default": 0.95,
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Maximum Audit Coverage",
+          "type": "number"
+        },
+        "minimum_audit_coverage": {
+          "default": 0.85,
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Minimum Audit Coverage",
+          "type": "number"
+        },
+        "validation_fraction": {
+          "default": 0.4,
+          "exclusiveMaximum": 1.0,
+          "exclusiveMinimum": 0.0,
+          "title": "Validation Fraction",
+          "type": "number"
+        }
+      },
+      "title": "EvaluationConfig",
+      "type": "object"
+    },
+    "ModelConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "committee_estimators": {
+          "default": 60,
+          "maximum": 1000,
+          "minimum": 10,
+          "title": "Committee Estimators",
+          "type": "integer"
+        },
+        "committee_size": {
+          "default": 5,
+          "maximum": 30,
+          "minimum": 2,
+          "title": "Committee Size",
+          "type": "integer"
+        },
+        "early_stopping": {
+          "$ref": "#/$defs/EarlyStoppingConfig"
+        },
+        "extra_trees_estimators": {
+          "default": 180,
+          "maximum": 5000,
+          "minimum": 20,
+          "title": "Extra Trees Estimators",
+          "type": "integer"
+        },
+        "hgb_max_iter": {
+          "default": 180,
+          "maximum": 2000,
+          "minimum": 20,
+          "title": "Hgb Max Iter",
+          "type": "integer"
+        },
+        "latency_repetitions": {
+          "default": 100,
+          "maximum": 10000,
+          "minimum": 5,
+          "title": "Latency Repetitions",
+          "type": "integer"
+        },
+        "max_p95_latency_ms": {
+          "default": 25.0,
+          "exclusiveMinimum": 0.0,
+          "title": "Max P95 Latency Ms",
+          "type": "number"
+        },
+        "monotonic_constraints": {
+          "additionalProperties": {
+            "type": "integer"
+          },
+          "title": "Monotonic Constraints",
+          "type": "object"
+        },
+        "n_jobs": {
+          "default": 1,
+          "minimum": 1,
+          "title": "N Jobs",
+          "type": "integer"
+        },
+        "search_iterations": {
+          "default": 4,
+          "maximum": 50,
+          "minimum": 1,
+          "title": "Search Iterations",
+          "type": "integer"
+        }
+      },
+      "title": "ModelConfig",
+      "type": "object"
+    },
+    "ProviderConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "callable": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Callable"
+        },
+        "concurrency": {
+          "default": 1,
+          "maximum": 256,
+          "minimum": 1,
+          "title": "Concurrency",
+          "type": "integer"
+        },
+        "initial_backoff_seconds": {
+          "default": 0.05,
+          "maximum": 60.0,
+          "minimum": 0.0,
+          "title": "Initial Backoff Seconds",
+          "type": "number"
+        },
+        "max_retries": {
+          "default": 2,
+          "maximum": 20,
+          "minimum": 0,
+          "title": "Max Retries",
+          "type": "integer"
+        },
+        "maximum_backoff_seconds": {
+          "default": 1.0,
+          "maximum": 600.0,
+          "minimum": 0.0,
+          "title": "Maximum Backoff Seconds",
+          "type": "number"
+        }
+      },
+      "title": "ProviderConfig",
+      "type": "object"
+    },
+    "SamplingConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "acquisition": {
+          "$ref": "#/$defs/AcquisitionConfig"
+        },
+        "batch_size": {
+          "default": 20,
+          "minimum": 1,
+          "title": "Batch Size",
+          "type": "integer"
+        },
+        "candidate_pool_size": {
+          "default": 4000,
+          "minimum": 10,
+          "title": "Candidate Pool Size",
+          "type": "integer"
+        },
+        "initial_size": {
+          "default": 80,
+          "minimum": 1,
+          "title": "Initial Size",
+          "type": "integer"
+        },
+        "mapping_budget": {
+          "default": 260,
+          "minimum": 1,
+          "title": "Mapping Budget",
+          "type": "integer"
+        },
+        "seed": {
+          "default": 42,
+          "maximum": 4294967295,
+          "minimum": 0,
+          "title": "Seed",
+          "type": "integer"
+        },
+        "strategy": {
+          "default": "active",
+          "enum": [
+            "active",
+            "lhs",
+            "random"
+          ],
+          "title": "Strategy",
+          "type": "string"
+        }
+      },
+      "title": "SamplingConfig",
+      "type": "object"
+    }
+  },
+  "$id": "https://pricing-function-mapper.local/schema/mapper-config-v1.json",
+  "additionalProperties": false,
+  "description": "Stable v1 configuration consumed by :class:`MappingRun`.",
+  "properties": {
+    "artifact": {
+      "$ref": "#/$defs/ArtifactConfig"
+    },
+    "config_version": {
+      "const": 1,
+      "default": 1,
+      "title": "Config Version",
+      "type": "integer"
+    },
+    "domain": {
+      "$ref": "#/$defs/DomainConfig"
+    },
+    "evaluation": {
+      "$ref": "#/$defs/EvaluationConfig"
+    },
+    "model": {
+      "$ref": "#/$defs/ModelConfig"
+    },
+    "provider": {
+      "$ref": "#/$defs/ProviderConfig"
+    },
+    "sampling": {
+      "$ref": "#/$defs/SamplingConfig"
+    }
+  },
+  "title": "Pricing Function Mapper v1 configuration",
+  "type": "object"
+}

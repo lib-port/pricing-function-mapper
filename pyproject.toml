@@ -1,38 +1,62 @@
 [build-system]
-requires = ["setuptools>=68", "wheel"]
+requires = ["setuptools>=77", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "pricing-function-mapper"
-version = "0.1.0"
-description = "Active-learning mapper for comprehensive car pricing functions"
+version = "1.0.0"
+description = "Production-grade offline mapper for comprehensive car-insurance quote functions"
 readme = "README.md"
-requires-python = ">=3.11"
-license = { file = "LICENSE" }
+requires-python = ">=3.11,<3.14"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Pricing Function Mapper contributors" }]
+keywords = ["car-insurance", "active-learning", "surrogate-model", "conformal-prediction"]
+classifiers = [
+  "Development Status :: 5 - Production/Stable",
+  "Environment :: Console",
+  "Intended Audience :: Financial and Insurance Industry",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Typing :: Typed",
+]
 dependencies = [
-  "numpy==2.4.2",
-  "pandas==3.0.1",
-  "scikit-learn==1.8.0",
+  "numpy>=1.26,<3",
+  "pandas>=2.1,<4",
+  "pydantic>=2.8,<3",
+  "scikit-learn>=1.5,<1.9",
+  "skops>=0.10,<1",
+  "threadpoolctl>=3.2,<4",
+  "tomli-w>=1.1,<2",
 ]
 
 [project.optional-dependencies]
 dev = [
   "pytest>=8.2.0",
+  "pytest-cov>=5.0.0",
+  "hypothesis>=6.112.0",
   "black>=24.8.0",
   "ruff>=0.6.8",
   "mypy>=1.11.0",
   "pre-commit>=3.8.0",
-]
-api = [
-  "fastapi>=0.115.0",
-  "uvicorn>=0.30.0",
+  "build>=1.2.2",
+  "twine>=5.1.1",
+  "pip-audit>=2.7.3",
 ]
 
 [project.scripts]
 pricing-mapper = "pricing_mapper.cli:run_cli"
 
 [tool.setuptools]
-packages = ["pricing_mapper"]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+pricing_mapper = ["py.typed", "templates/*.md"]
 
 [tool.black]
 line-length = 100
@@ -40,6 +64,8 @@ exclude = '''
 /(
     \.venv
   | \.git
+  | build
+  | dist
   | pricing_function_mapper\.egg-info
 )/
 '''
@@ -47,16 +73,56 @@ exclude = '''
 [tool.ruff]
 line-length = 100
 target-version = "py311"
-exclude = [".venv", ".git", "pricing_function_mapper.egg-info"]
+exclude = [".venv", ".git", "build", "dist", "pricing_function_mapper.egg-info"]
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "UP", "B"]
+select = ["E", "F", "I", "UP", "B", "S", "C4", "SIM", "RUF"]
+ignore = ["S101"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101", "S105", "S106"]
 
 [tool.mypy]
 python_version = "3.11"
-ignore_missing_imports = true
+strict = true
+packages = ["pricing_mapper"]
+mypy_path = "src"
+ignore_missing_imports = false
 warn_redundant_casts = true
 warn_unused_ignores = true
 check_untyped_defs = true
 no_implicit_optional = true
-exclude = "(^\\.venv/|pricing_function_mapper\\.egg-info/)"
+exclude = "(^\\.venv/|^build/|^dist/|pricing_function_mapper\\.egg-info/)"
+
+[[tool.mypy.overrides]]
+module = [
+  "pandas",
+  "sklearn",
+  "sklearn.*",
+  "skops",
+  "skops.*",
+]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+addopts = "--strict-config --strict-markers"
+testpaths = ["tests"]
+pythonpath = ["src"]
+markers = [
+  "benchmark: deterministic accuracy or latency benchmark",
+  "slow: tests excluded from the quick local suite",
+]
+
+[tool.coverage.run]
+branch = true
+source = ["pricing_mapper"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
+fail_under = 90
+exclude_also = [
+  "if TYPE_CHECKING:",
+  "if __name__ == .__main__.:",
+  "raise NotImplementedError",
+]

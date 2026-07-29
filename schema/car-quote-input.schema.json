@@ -1,0 +1,129 @@
+{
+  "$id": "https://pricing-function-mapper.local/schema/car-quote-input-v1.json",
+  "additionalProperties": false,
+  "description": "The stable, strict 15-field public input model.\n\nConfiguration-specific bounds are checked by :class:`DomainSpec`. This base\nmodel enforces the complete v1 car-insurance schema and its supported outer\nlimits. Unknown fields, booleans in numeric fields, NaN, infinity, and\ninfeasible licence tenure are rejected.",
+  "properties": {
+    "annual_km": {
+      "maximum": 60000,
+      "minimum": 1000,
+      "title": "Annual Km",
+      "type": "integer"
+    },
+    "claims_5y": {
+      "maximum": 6,
+      "minimum": 0,
+      "title": "Claims 5Y",
+      "type": "integer"
+    },
+    "convictions_5y": {
+      "maximum": 6,
+      "minimum": 0,
+      "title": "Convictions 5Y",
+      "type": "integer"
+    },
+    "driver_age": {
+      "maximum": 90.0,
+      "minimum": 17.0,
+      "title": "Driver Age",
+      "type": "number"
+    },
+    "excess": {
+      "maximum": 5000,
+      "minimum": 0,
+      "title": "Excess",
+      "type": "integer"
+    },
+    "hire_car": {
+      "enum": [
+        "none",
+        "basic",
+        "premium"
+      ],
+      "title": "Hire Car",
+      "type": "string"
+    },
+    "parking": {
+      "enum": [
+        "garage",
+        "driveway",
+        "street"
+      ],
+      "title": "Parking",
+      "type": "string"
+    },
+    "postcode_risk": {
+      "maximum": 1.0,
+      "minimum": 0.0,
+      "title": "Postcode Risk",
+      "type": "number"
+    },
+    "rating": {
+      "enum": [
+        "market",
+        "agreed"
+      ],
+      "title": "Rating",
+      "type": "string"
+    },
+    "theft_risk": {
+      "maximum": 1.0,
+      "minimum": 0.0,
+      "title": "Theft Risk",
+      "type": "number"
+    },
+    "usage": {
+      "enum": [
+        "private",
+        "commute",
+        "business"
+      ],
+      "title": "Usage",
+      "type": "string"
+    },
+    "vehicle_value": {
+      "maximum": 200000.0,
+      "minimum": 2000.0,
+      "title": "Vehicle Value",
+      "type": "number"
+    },
+    "vehicle_year": {
+      "maximum": 2026,
+      "minimum": 1998,
+      "title": "Vehicle Year",
+      "type": "integer"
+    },
+    "windscreen": {
+      "enum": [
+        "no",
+        "yes"
+      ],
+      "title": "Windscreen",
+      "type": "string"
+    },
+    "years_licensed": {
+      "maximum": 70,
+      "minimum": 0,
+      "title": "Years Licensed",
+      "type": "integer"
+    }
+  },
+  "required": [
+    "driver_age",
+    "years_licensed",
+    "vehicle_year",
+    "vehicle_value",
+    "annual_km",
+    "claims_5y",
+    "convictions_5y",
+    "postcode_risk",
+    "theft_risk",
+    "excess",
+    "usage",
+    "parking",
+    "hire_car",
+    "windscreen",
+    "rating"
+  ],
+  "title": "CarQuoteInput v1",
+  "type": "object"
+}

@@ -1,0 +1,66 @@
+config_version = 1
+
+[sampling]
+mapping_budget = 260
+initial_size = 80
+batch_size = 20
+candidate_pool_size = 4000
+seed = 42
+strategy = "active"
+
+[sampling.acquisition]
+greedy_diversity_weight = 0.50
+focused_fraction = 0.30
+
+[sampling.acquisition.weights]
+uncertainty = 0.10
+residual = 0.05
+breakpoint = 0.20
+diversity = 0.65
+
+[model]
+search_iterations = 4
+hgb_max_iter = 180
+extra_trees_estimators = 180
+committee_size = 5
+committee_estimators = 60
+n_jobs = 1
+max_p95_latency_ms = 25.0
+latency_repetitions = 100
+
+[model.monotonic_constraints]
+vehicle_value = 1
+postcode_risk = 1
+theft_risk = 1
+claims_5y = 1
+convictions_5y = 1
+excess = -1
+annual_km = 1
+
+[model.early_stopping]
+patience_batches = 0
+minimum_batches = 3
+minimum_relative_improvement = 0.005
+confidence_level = 0.90
+
+[evaluation]
+evaluation_budget = 120
+validation_fraction = 0.40
+calibration_fraction = 0.30
+audit_fraction = 0.30
+conformal_coverage = 0.90
+minimum_audit_coverage = 0.85
+maximum_audit_coverage = 0.95
+bootstrap_iterations = 300
+bootstrap_confidence = 0.95
+
+[provider]
+max_retries = 2
+initial_backoff_seconds = 0.05
+maximum_backoff_seconds = 1.0
+concurrency = 1
+
+[artifact]
+output_dir = "outputs"
+state_dir_name = ".runs"
+model_card_title = "Comprehensive Car Insurance Surrogate"

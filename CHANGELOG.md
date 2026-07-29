@@ -1,0 +1,33 @@
+# Changelog
+
+All notable changes follow Keep a Changelog conventions.
+
+## 1.0.0 - 2026-07-29
+
+### Added
+
+- Strict 15-field `CarQuoteInput`, nested TOML `MapperConfig`, generated JSON
+  Schemas, `Prediction`, `MappingRun`, and `PricingEngine`.
+- Independent validation, conformal calibration, and final audit budgets.
+- Validation-confidence early stopping, production metrics, bootstrap bounds,
+  risk slices, model latency selection, and monotonic tradeoff reporting.
+- Pluggable uncertainty, residual, breakpoint, and diversity acquisition.
+- Provider retry/permanent failure types, payload-free telemetry, declared
+  bounded parallelism, and per-quote durability.
+- Transactional SQLite resume, RNG/batch recovery, run locks, atomic artifact
+  publication, `skops` persistence, hashes, model cards, and provenance.
+- Subcommand CLI, multi-version CI, installed-wheel smoke test, dependency
+  audit, and scheduled five-seed benchmark.
+- Mermaid system, data-flow, lifecycle, recovery, and trust-boundary diagrams,
+  plus operational playbooks for runs, incidents, promotion, upgrades, and
+  rollback.
+
+### Removed
+
+- Legacy flag-mode CLI, JSON configuration, pickle engines, JSON checkpoints,
+  FastAPI extra, and Vagrant workflow.
+
+### Security
+
+- v0 pickle/state artifacts are rejected. Existing CSV observations may be
+  reused only through strict `--seed-data` validation.

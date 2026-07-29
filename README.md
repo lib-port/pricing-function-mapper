@@ -1,468 +1,283 @@
 # Pricing Function Mapper
 
-[![Python](https://img.shields.io/badge/python-%3E%3D3.11-3776AB?logo=python&logoColor=white)](https://www.python.org/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
-[![Lint: ruff](https://img.shields.io/badge/lint-ruff-D7FF64?logo=ruff&logoColor=111111)](https://github.com/astral-sh/ruff)
-[![Type check: mypy](https://img.shields.io/badge/type%20check-mypy-2A6DB2)](https://github.com/python/mypy)
-[![Tests: pytest](https://img.shields.io/badge/tests-pytest-0A9EDC?logo=pytest&logoColor=white)](https://github.com/pytest-dev/pytest)
+Production-grade offline Python library and CLI for learning a surrogate of a
+trusted comprehensive-car-insurance quote function.
 
-Active-learning mapper for a pricing function (default: mock comprehensive car insurance quote model).
+Version 1 separates adaptive mapping from independent validation, conformal
+calibration, and final audit samples. It exports strict, hash-verified artifact
+directories and never loads pickle.
 
-This project incrementally samples the input space, trains surrogate models, and selects high-value next queries to approximate the behavior of a target quote/pricing function.
+## What v1 guarantees
 
-## Highlights
+- `CarQuoteInput` validates exactly 15 car-insurance fields. Public inference
+  rejects missing, unknown, non-finite, infeasible, and out-of-domain values;
+  it never clips them.
+- Mapping and evaluation have separate quote budgets. Evaluation rows are
+  generated before adaptive sampling, with default 40% validation, 30%
+  calibration, and 30% audit allocation.
+- When enabled, early stopping uses validation MAE and bootstrap confidence
+  bounds; it is disabled by default. Neither calibration nor audit targets
+  enter acquisition, tuning, early stopping, or model selection.
+- Bounded randomized selection compares native-categorical monotonic and
+  unconstrained histogram gradient boosting with an ExtraTrees pipeline under
+  a warm single-row p95 latency ceiling.
+- Predictions contain a split-conformal interval, model version, and warnings.
+  The final audit reports coverage and interval width.
+- Every completed quote is journaled transactionally in SQLite. Resume
+  restores the mapping RNG and pending batch, reproducing an uninterrupted run.
+- Artifacts use `skops`, JSON/TOML metadata, SHA-256 hashes, an exclusive run
+  lock, and atomic staging-directory rename. v0 pickle/state files are rejected.
 
-- Active-learning query strategy with uncertainty, boundary, local-error, and breakpoint components.
-- Optional staged mapping and early stopping to reduce query volume.
-- Segment-focused acquisition with direct constrained sampling for targeted analysis
-  (e.g., low-risk/high-premium cohorts).
-- Validated, collision-resistant run artifacts: dataset, metadata, optional checkpoint state,
-  and a serialized pricing engine fitted on every final sample.
+This project is an offline mapper, not an HTTP service. Hosted serving and
+vendor-specific integrations are intentionally outside v1.
 
-## Purpose
+Model versions are deterministic hashes of model-affecting configuration,
+fit observations, numerical/model dependency versions, and conformal state;
+artifact paths and wall-clock timings are excluded.
 
-The mapper is designed to:
+## Install
 
-- Learn pricing behavior with fewer queries than naive random sampling.
-- Concentrate samples near uncertain regions and likely decision boundaries.
-- Produce reproducible datasets and run metadata for analysis.
-- Support resumable runs and benchmark comparisons across strategy settings.
-
-## High-Level Approach
-
-For each run:
-
-1. Generate an initial sample set from the domain.
-2. Query the pricing function and cache results.
-3. Train surrogate models:
-   - Bootstrapped Random Forest ensemble (mean + uncertainty)
-   - Optional monotonic HistGradientBoosting model (mean prediction)
-4. Propose next batch using an acquisition mix:
-   - uncertainty sampling
-   - boundary refinement
-   - error-driven local exploration
-   - breakpoint probing
-5. Repeat until budget is reached or early-stop criteria are met.
-6. Refit the export models on every collected sample.
-7. Write artifacts (dataset, metadata, optional state checkpoint, pricing engine).
-
-## Repository Structure
-
-- `pricing_mapper/domain.py`: variable definitions, domain construction, canonicalization.
-- `pricing_mapper/encoding.py`: cached feature encoding pipeline.
-- `pricing_mapper/models.py`: surrogate model wrappers.
-- `pricing_mapper/active_mapper.py`: active-learning loop, persistence, profiling.
-- `pricing_mapper/quote.py`: default quote function + pluggable provider loader.
-- `pricing_mapper/cli.py`: CLI entrypoint.
-- `pricing_mapper/engine.py`: serialized pricing engine artifact + inference helpers.
-- `pricing_mapper/api.py`: optional FastAPI serving interface for engine inference.
-- `pricing_mapper/benchmark.py`: benchmark presets and result writer.
-- `comp_car_active_mapper_advanced.py`: backwards-compatible executable CLI wrapper.
-- `config.example.json`: baseline configuration template.
-- `config.segment.example.json`: segment-focused preset (low-risk/high-premium).
-- `scripts/quality.sh` and `scripts/smoke.sh`: local quality and smoke helpers.
-- `tests/`: unit and integration tests.
-
-## Requirements
-
-- Python 3.11+
-- Runtime dependencies from `pyproject.toml`/`requirements.txt`: `numpy`, `pandas`,
-  and `scikit-learn`
-
-## Local Setup
+Python 3.11–3.13 is supported.
 
 ```bash
-python3 -m venv .venv
+python -m venv .venv
 source .venv/bin/activate
-pip install -e .
+python -m pip install .
 ```
 
-For development tools:
+For development:
 
 ```bash
-pip install -e .[dev]
+python -m pip install -e '.[dev]'
 pre-commit install
 ```
 
-## Quick Start
+`pylock.toml` records the reproducible lock for the platform on which it was
+generated. The project metadata retains compatible ranges for supported Python
+versions and platforms.
 
-Default run:
+## Quick start
 
-```bash
-python -m pricing_mapper
-```
-
-This creates a uniquely named run folder under `outputs/<run_id>/` with:
-
-- `comp_car_quotes_advanced.csv`
-- `run_metadata.json`
-- `pricing_engine.pkl`
-
-With checkpointing enabled (the default), it also creates `run_state.json`. Setting
-`checkpoint_every_batches` to `0` disables checkpoint creation for a new run.
-Existing run artifacts are never overwritten unless `--resume` is used.
-
-## CLI Usage
-
-### Validate config only (no training)
+Validate the strict TOML configuration and provider:
 
 ```bash
-python -m pricing_mapper --config config.example.json --dry-run
+pricing-mapper config validate --config config.example.toml
 ```
 
-Dry-run validation also resolves the configured quote-provider callable.
-
-### Run with explicit overrides
+Run mapping with the bundled deterministic reference provider:
 
 ```bash
-python -m pricing_mapper \
-  --budget 260 \
-  --init-n 95 \
-  --batch-size 20 \
-  --pool-size 14000 \
-  --distance-backend knn \
-  --output-dir outputs \
-  --run-id my_run
+pricing-mapper map run \
+  --config config.example.toml \
+  --run-id example
 ```
 
-### Segment-focused mapping (low-risk, high-premium)
+The v1 vehicle-year ceiling and illustrative reference provider use a fixed
+2026 rating year so configuration fingerprints, benchmarks, and crash recovery
+do not change at a calendar-year boundary.
+
+The command prints the artifact path. Price one row:
 
 ```bash
-python -m pricing_mapper \
-  --config config.example.json \
-  --segment-focus-enabled \
-  --segment-constraints '{"claims_5y":{"max":1},"convictions_5y":{"max":0},"postcode_risk":{"max":0.35},"parking":{"in":["garage","driveway"]}}' \
-  --segment-target-weight 0.45 \
-  --segment-sigma-weight 0.25
+pricing-mapper predict row \
+  --artifact outputs/example \
+  --input examples/quote-row.json
 ```
 
-Or run the ready-made preset:
+The result has this contract:
+
+```json
+{
+  "premium": 789.12,
+  "lower": 650.34,
+  "upper": 927.90,
+  "model_version": "v1-...",
+  "warnings": []
+}
+```
+
+Verify the complete artifact before moving it:
 
 ```bash
-python -m pricing_mapper --config config.segment.example.json
+pricing-mapper artifact inspect --artifact outputs/example
+pricing-mapper model evaluate --artifact outputs/example --require-gates
 ```
 
-### Early-stop + staged mapping example
+`model evaluate` recomputes independent audit metrics and interval coverage
+from the exported audit rows, and remeasures warm single-row latency on the
+current machine.
+
+## CLI
+
+Version 1 uses subcommands only:
+
+```text
+pricing-mapper config validate
+pricing-mapper map run
+pricing-mapper map resume
+pricing-mapper model evaluate
+pricing-mapper predict row
+pricing-mapper predict batch
+pricing-mapper artifact inspect
+pricing-mapper benchmark
+```
+
+Resume after interruption with the same configuration and run ID:
 
 ```bash
-python -m pricing_mapper \
-  --config config.example.json \
-  --staged-mapping-enabled \
-  --staged-stage1-fraction 0.4 \
-  --early-stop-patience-batches 3 \
-  --early-stop-min-batches 4 \
-  --early-stop-min-rel-improvement 0.005
+pricing-mapper map resume \
+  --config config.example.toml \
+  --run-id example
 ```
 
-### Resume a run
-
-Start with an explicit run ID:
+Import validated CSV observations instead of a v0 checkpoint:
 
 ```bash
-python -m pricing_mapper --config config.example.json --run-id my_run
+pricing-mapper map run \
+  --config config.example.toml \
+  --run-id seeded \
+  --seed-data observations.csv
 ```
 
-Then use the same ID and a budget greater than or equal to the checkpoint's sample count.
-For example, to extend `my_run`:
+The seed CSV must have the exact 15 input columns in canonical order followed
+by `premium`. It is validated against the configured domain. Pickle artifacts
+and JSON state cannot be converted or loaded.
+
+Batch prediction accepts the exact 15 input columns in canonical order:
 
 ```bash
-python -m pricing_mapper \
-  --config config.example.json \
-  --run-id my_run \
-  --budget 320 \
-  --resume
+pricing-mapper predict batch \
+  --artifact outputs/example \
+  --input rows.csv \
+  --output predictions.csv
 ```
 
-Resume safety checks:
+Documented process exit codes are:
 
-- `--resume` fails if the resolved state file does not exist; a generated `run_id` cannot
-  identify an earlier run.
-- Checkpoint structure, row/value/cache consistency, RNG state, and numeric values are
-  validated before any state is applied.
-- `seed`, `quote_provider`, `domain_overrides`, monotone setting, and RF model size must
-  match the saved state.
-- The resolved domain snapshot must also match, preventing silent resume drift when dynamic
-  bounds (such as the current vehicle year) change.
-- Batch/early-stop counters and RF/proposal RNG state are restored so, with unchanged mapping
-  settings, continuing a completed lower-budget run matches the equivalent uninterrupted run.
-- Resuming an already early-stopped checkpoint does not silently add samples; set
-  `early_stop_patience_batches` to `0` if you intentionally want to continue it.
-- A resumed run always writes its final state, even when periodic checkpointing is disabled.
+- `0`: success
+- `2`: invalid input or configuration
+- `3`: provider, persistence, or run failure
+- `4`: unsafe, corrupt, or incompatible artifact
+- `5`: requested evaluation/benchmark gate failed
 
-### Benchmark presets
+## Library API
+
+```python
+from pricing_mapper import CarQuoteInput, MapperConfig, MappingRun, PricingEngine
+
+config = MapperConfig()
+result = MappingRun(config, run_id="library-run").run()
+
+engine = PricingEngine.load(result.artifact_dir)
+quote = CarQuoteInput.model_validate(
+    {
+        "driver_age": 40.0,
+        "years_licensed": 20,
+        "vehicle_year": 2022,
+        "vehicle_value": 35000.0,
+        "annual_km": 10000,
+        "claims_5y": 0,
+        "convictions_5y": 0,
+        "postcode_risk": 0.2,
+        "theft_risk": 0.2,
+        "excess": 700,
+        "usage": "private",
+        "parking": "garage",
+        "hire_car": "none",
+        "windscreen": "no",
+        "rating": "market",
+    },
+    strict=True,
+)
+prediction = engine.predict(quote)
+```
+
+Stable public interfaces are `CarQuoteInput`, `QuoteProvider`, `MapperConfig`,
+`Prediction`, `MappingRun`, and `PricingEngine`.
+
+## Local quote providers
+
+Configure a trusted callable:
+
+```toml
+[provider]
+callable = "my_insurer.quotes:quote"
+max_retries = 3
+concurrency = 1
+```
+
+The callable receives `CarQuoteInput` and returns a finite, non-negative
+number. Raise `ProviderUnavailable` for retryable failures and
+`ProviderRejected` for permanent failures. Unexpected exceptions are treated
+as permanent. Parallel execution is permitted only when the callable declares:
+
+```python
+quote.thread_safe = True
+quote.max_concurrency = 4
+quote.provider_id = "my-insurer-rating-v7"
+```
+
+Treat `provider_id` as a behavior version: change it whenever rating logic or
+upstream data changes. Resume rejects an identity mismatch.
+
+Attempt outcome, latency, error type, and provider identity are stored without
+logging quote payloads. Sequential execution is the default.
+
+## Artifact layout
+
+An atomic v1 directory contains:
+
+```text
+manifest.json             SHA-256 hashes and artifact identity
+schema.json               generated CarQuoteInput JSON Schema
+config.toml               validated configuration snapshot
+domain.json               resolved domain snapshot
+dataset.csv               mapping and labeled evaluation observations
+dataset.schema.json       explicit CSV types and split metadata
+model.skops               fitted sklearn estimator only
+model.json                estimator family, encoding, and selection report
+conformal.json            calibration method and radius
+evaluation.json           held-out metrics, confidence bounds, and gates
+model-card.md             intended use, performance, and limitations
+provenance.json           provider/run/build provenance without payload logs
+dependencies.json         exact artifact dependency versions
+```
+
+Loading checks every hash, rejects unlisted files and symlinks, enforces the
+saved scikit-learn version, checks a fixed `skops` type allow-list, and
+reconstructs validation and encoding from versioned metadata.
+
+## Development gates
 
 ```bash
-python -m pricing_mapper \
-  --config config.example.json \
-  --benchmark \
-  --benchmark-output benchmark_results.json
+scripts/quality.sh
+scripts/smoke.sh
 ```
 
-This writes:
-
-- `benchmark_results.json`
-- `benchmark_results.csv`
-
-`--benchmark-output` must end in `.json`. Presets run independently: resume is disabled and
-benchmark runs do not create mapper checkpoints or engine artifacts.
-
-### Use your own quote provider
-
-```bash
-python -m pricing_mapper --quote-provider my_module.my_quotes:quote
-```
-
-Provider contract:
-
-- Callable signature: `quote(row: dict[str, Any]) -> float`
-- Return value: finite and non-negative
-- Must be deterministic for reproducibility unless intentionally stochastic.
-- Custom categorical levels require a custom provider that supports those values; the
-  default provider rejects unsupported categorical overrides during config validation.
-
-### Price a single row from a JSON string
-
-```bash
-python -m pricing_mapper \
-  --engine-path outputs/<run_id>/pricing_engine.pkl \
-  --price-row '{"driver_age":40,"years_licensed":20,"vehicle_year":2022,"vehicle_value":35000,"annual_km":10000,"claims_5y":0,"convictions_5y":0,"postcode_risk":0.2,"theft_risk":0.2,"excess":700,"usage":"private","parking":"garage","hire_car":"none","windscreen":"no","rating":"market"}'
-```
-
-Inference rows must contain exactly the 15 configured input fields. Missing/unknown fields,
-non-finite numeric values, and categorical values outside the engine's domain are rejected.
-Numeric values are canonicalized to the saved domain; integer inputs are rounded and all
-numeric inputs are clipped to their configured bounds.
-
-### Price a single row from a JSON file
-
-```bash
-python -m pricing_mapper \
-  --engine-path outputs/<run_id>/pricing_engine.pkl \
-  --price-row-json row.json
-```
-
-### Price a batch CSV
-
-```bash
-python -m pricing_mapper \
-  --engine-path outputs/<run_id>/pricing_engine.pkl \
-  --price-input-csv input_rows.csv \
-  --price-output-csv priced_rows.csv
-```
-
-### Serve the pricing engine as an API (optional)
-
-Install optional dependencies:
-
-```bash
-pip install -e .[api]
-```
-
-Run API server:
-
-```bash
-python -m pricing_mapper \
-  --engine-path outputs/<run_id>/pricing_engine.pkl \
-  --serve-api \
-  --host 127.0.0.1 \
-  --port 8000
-```
-
-Endpoints:
-
-- `GET /health`
-- `GET /model-info`
-- `POST /price` (JSON object row)
-- `POST /price-batch` (`{"rows":[...]}`)
-
-The four pricing modes (`--price-row`, `--price-row-json`, `--price-input-csv`, and
-`--serve-api`) are mutually exclusive.
-
-## Configuration
-
-Use `config.example.json` as a template. Key options include:
-
-- Sampling controls: `budget`, `init_n`, `batch_size`, `pool_size`
-- Model controls: `rf_n_models`, `rf_n_estimators`, `refit_every_batches`
-- Search behavior: `distance_backend`, `acquisition_mix`, `breakpoint_vars`
-- Early stop controls: `early_stop_patience_batches`, `early_stop_min_batches`, `early_stop_min_rel_improvement`
-- Staged mapping controls: `staged_mapping_enabled`, `staged_stage1_fraction`, `staged_focus_jitter_per_anchor`
-- Segment targeting controls: `segment_focus_enabled`, `segment_constraints`, `segment_target_weight`, `segment_sigma_weight`, `segment_min_candidates`, `segment_pool_max_tries`
-- Performance controls: `cv_subsample_max`
-- Artifacts: `output_dir`, `run_id`, `output_csv`, `output_metadata_json`, `state_path`
-- Engine artifact: `engine_path`
-- Resume/checkpoint: `resume`, `checkpoint_every_batches`
-- Provider: `quote_provider`
-- Domain scoping: `domain_overrides`
-
-Validation behavior:
-
-- Unknown keys in `domain_overrides` are rejected (no silent ignore).
-- Bounds and weights must be finite; integer settings must actually be integers.
-- `rf_n_models` and `rf_n_estimators` must be `> 0`; `rf_n_jobs` must be `-1` or positive.
-- `breakpoint_vars` must be known numeric variables without duplicates.
-- `segment_constraints` validate names, values, domain intersections, categorical levels,
-  cross-field feasibility, and operator compatibility (`min`/`max`/`eq`/`in`).
-- Enabling segment focus requires at least one segment constraint.
-- Artifact filenames must be non-empty and distinct. The four artifact settings are treated
-  as filenames and placed under `output_dir/run_id/`.
-
-## Output Artifacts
-
-### Dataset CSV
-
-Contains sampled rows and true `premium` values queried from the provider.
-
-### Metadata JSON
-
-Includes:
-
-- run stats and elapsed time
-- completion flags (`completed_budget`, `early_stopped`, `stop_reason`)
-- per-phase profiling times
-- MAE diagnostics
-- optional segment-specific MAE diagnostics when `segment_constraints` are set
-- resolved config
-- feature list
-- artifact paths
-- Python, NumPy, pandas, and scikit-learn versions
-- whether a checkpoint state file was written
-
-### State JSON
-
-Checkpoint state used for resume support. It is present when checkpointing is enabled or a
-run is resumed.
-
-- versioned schema
-- atomic writes
-- migration support for older schema versions
-- model-fit/RNG and batch/early-stop state for deterministic continuation
-- resolved domain snapshot
-
-### Pricing Engine (`pricing_engine.pkl`)
-
-Serialized inference artifact containing:
-
-- domain schema and canonicalization behavior
-- fitted surrogate model(s)
-- feature ordering metadata
-- run config snapshot
-
-The engine uses Python pickle. Load only engine files produced by a trusted source; loading
-an untrusted pickle can execute arbitrary code. Engine loading also validates schema,
-configuration, model fit state, and feature metadata before inference.
-
-## Quality and Testing
-
-Run all local quality checks:
-
-```bash
-./scripts/quality.sh
-```
-
-Equivalent manual commands:
-
-```bash
-ruff check pricing_mapper tests comp_car_active_mapper_advanced.py
-black --check pricing_mapper tests comp_car_active_mapper_advanced.py
-mypy pricing_mapper
-python -m pytest -q
-```
-
-Run a quick local smoke execution:
-
-```bash
-./scripts/smoke.sh
-```
-
-## Running in a Debian Vagrant VM
-
-The following creates an isolated Debian VM suitable for running this project.
-
-### 1. Install prerequisites on host
-
-- Vagrant
-- VirtualBox (or another Vagrant provider)
-
-### 2. Review the included `Vagrantfile`
-
-The repository's `Vagrantfile` contains:
-
-```ruby
-Vagrant.configure("2") do |config|
-  config.vm.box = "debian/bookworm64"
-  config.vm.hostname = "pricing-mapper"
-
-  config.vm.provider "virtualbox" do |vb|
-    vb.memory = 4096
-    vb.cpus = 2
-  end
-
-  config.vm.synced_folder ".", "/vagrant"
-
-  config.vm.provision "shell", inline: <<-SHELL
-    set -e
-    apt-get update
-    apt-get install -y python3 python3-venv python3-pip git build-essential
-  SHELL
-end
-```
-
-### 3. Start VM and enter shell
-
-```bash
-vagrant up
-vagrant ssh
-```
-
-### 4. Set up project inside VM
-
-```bash
-cd /vagrant
-python3 -m venv .venv
-source .venv/bin/activate
-pip install --upgrade pip
-pip install -e .
-```
-
-### 5. Run mapper
-
-```bash
-python -m pricing_mapper --config config.example.json
-```
-
-### 6. Optional: install dev tools and run checks
-
-```bash
-pip install -e .[dev]
-ruff check pricing_mapper tests comp_car_active_mapper_advanced.py
-mypy pricing_mapper
-python -m pytest -q
-```
-
-### 7. Stop VM
-
-```bash
-exit
-vagrant halt
-```
-
-## Disclaimers and Usage Boundaries
-
-- This project is for research, testing, and internal analysis workflows.
-- Default quote logic is synthetic and not an insurer-approved pricing engine.
-- If you connect a real quote provider, you are responsible for authorization, legal compliance, and access controls.
-- Do not use outputs as a sole basis for underwriting, premium setting, consumer disclosures, or regulatory filings.
-- Ensure compliance with applicable insurance, privacy, consumer protection, and anti-discrimination laws in your jurisdiction.
-- Respect provider terms of service, rate limits, and data handling requirements.
-- Validate model behavior independently before operational use.
-- No warranty is provided for fitness, correctness, or regulatory suitability.
-
-Date handling:
-
-- Vehicle-year limits and synthetic quote vehicle-age logic use the current UTC year at runtime (not a fixed year constant).
+The CI matrix covers Python 3.11–3.13, Ruff, Black, strict mypy, branch
+coverage, wheel/sdist builds, installed-wheel CLI smoke tests, dependency
+audit, schema freshness, and artifact validation. A scheduled five-seed
+benchmark compares active acquisition with equal-budget LHS and random
+sampling and enforces accuracy, conformal coverage, per-run latency, and
+latency-regression gates.
+
+See:
+
+- [Architecture](docs/architecture.md)
+- [Operational playbooks](docs/operations.md)
+- [Configuration reference](docs/configuration.md)
+- [Troubleshooting](docs/troubleshooting.md)
+- [Security policy](SECURITY.md)
+- [Regulatory limitations](docs/regulatory-limitations.md)
+- [Release procedure](docs/release.md)
+
+## Regulatory notice
+
+This software does not establish legal or regulatory compliance. The bundled
+provider is synthetic. Real insurance use requires jurisdiction-specific
+actuarial, anti-discrimination, privacy, explainability, governance,
+rate-filing, monitoring, and human-oversight review.
 
 ## License
 
-See `LICENSE`.
+MIT. See [LICENSE](LICENSE).
