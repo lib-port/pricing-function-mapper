@@ -83,7 +83,6 @@ ignore = ["S101"]
 "tests/**" = ["S101", "S105", "S106"]
 
 [tool.mypy]
-python_version = "3.11"
 strict = true
 packages = ["pricing_mapper"]
 mypy_path = "src"
