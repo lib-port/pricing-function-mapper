@@ -18,6 +18,8 @@ from sklearn.ensemble import (
     RandomForestRegressor,
 )
 from sklearn.exceptions import NotFittedError
+from sklearn.gaussian_process import GaussianProcessRegressor
+from sklearn.gaussian_process.kernels import ConstantKernel, Matern, WhiteKernel
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder
 from sklearn.utils.validation import check_is_fitted
@@ -137,6 +139,56 @@ class AcquisitionCommittee:
         mean, _ = self.predict(rows)
         residuals = np.asarray(targets, dtype=float) - mean
         return np.asarray(residuals, dtype=float)
+
+
+class BayesianAcquisitionModel:
+    """Deterministic Gaussian process used only for Bayesian acquisition scores."""
+
+    def __init__(self, domain: DomainSpec, seed: int) -> None:
+        self.domain = domain
+        self.seed = seed
+        self.encoder = FeatureEncoder(domain)
+        self.model: GaussianProcessRegressor | None = None
+
+    def fit(
+        self,
+        rows: Sequence[Mapping[str, Any]],
+        targets: np.ndarray,
+    ) -> BayesianAcquisitionModel:
+        if len(rows) == 0 or len(rows) != len(targets):
+            raise ValueError("Bayesian training rows and targets must be non-empty and aligned")
+        features = self.encoder.scaled_one_hot(rows)
+        kernel = ConstantKernel(1.0, constant_value_bounds="fixed") * Matern(
+            length_scale=1.0,
+            length_scale_bounds="fixed",
+            nu=1.5,
+        ) + WhiteKernel(noise_level=1e-6, noise_level_bounds="fixed")
+        self.model = GaussianProcessRegressor(
+            kernel=kernel,
+            alpha=1e-8,
+            optimizer=None,
+            normalize_y=True,
+            random_state=self.seed,
+            copy_X_train=True,
+        )
+        self.model.fit(features, np.asarray(targets, dtype=float))
+        return self
+
+    def predict(self, rows: Sequence[Mapping[str, Any]]) -> tuple[np.ndarray, np.ndarray]:
+        if self.model is None:
+            raise RuntimeError("Bayesian acquisition model has not been fitted")
+        if not rows:
+            empty = np.empty(0, dtype=float)
+            return empty, empty
+        mean, standard_deviation = self.model.predict(
+            self.encoder.scaled_one_hot(rows),
+            return_std=True,
+        )
+        mean_array = np.asarray(mean, dtype=float)
+        standard_deviation_array = np.asarray(standard_deviation, dtype=float)
+        if not np.all(np.isfinite(mean_array)) or not np.all(np.isfinite(standard_deviation_array)):
+            raise RuntimeError("Bayesian acquisition model returned non-finite predictions")
+        return mean_array, standard_deviation_array
 
 
 def _choice(rng: np.random.Generator, values: Sequence[Any]) -> Any:

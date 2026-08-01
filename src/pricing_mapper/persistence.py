@@ -20,6 +20,7 @@ from typing import Any, Literal, Self
 
 import numpy as np
 
+from pricing_mapper.advisor import AdvisorDecisionRecord, allowed_diagnostic_bin_ids
 from pricing_mapper.domain import FIELD_ORDER, CarQuoteInput, DomainSpec, row_key
 from pricing_mapper.exceptions import PersistenceError
 from pricing_mapper.provider import ProviderAttempt
@@ -233,6 +234,23 @@ class RunStore:
                 raise PersistenceError(
                     f"SQLite run state is missing required tables: {sorted(missing)}"
                 )
+            batch_columns = {
+                str(row[1])
+                for row in store._connection.execute("PRAGMA table_info(batches)").fetchall()
+            }
+            required_batch_columns = {
+                "batch_id",
+                "status",
+                "metrics_json",
+                "advisor_json",
+            }
+            missing_batch_columns = required_batch_columns - batch_columns
+            if missing_batch_columns:
+                store.close()
+                raise PersistenceError(
+                    "SQLite run state uses an incompatible batches schema; missing columns: "
+                    f"{sorted(missing_batch_columns)}"
+                )
             return store
         except sqlite3.DatabaseError as exc:
             if connection is not None:
@@ -250,6 +268,7 @@ class RunStore:
             batch_id INTEGER PRIMARY KEY,
             status TEXT NOT NULL CHECK (status IN ('generated', 'quoted', 'evaluated')),
             metrics_json TEXT,
+            advisor_json TEXT,
             UNIQUE(batch_id)
         );
         CREATE TABLE samples (
@@ -379,9 +398,24 @@ class RunStore:
         batch_id: int | None,
         source: str,
         mapping_rng_state: Mapping[str, Any] | None = None,
+        advisor_decision: Mapping[str, Any] | None = None,
     ) -> list[SampleRecord]:
         if split not in _SPLITS:
             raise ValueError(f"unknown sample split {split!r}")
+        validated_advisor: dict[str, Any] | None = None
+        if advisor_decision is not None:
+            try:
+                parsed_advisor = AdvisorDecisionRecord.model_validate(
+                    dict(advisor_decision),
+                    strict=True,
+                )
+            except (TypeError, ValueError) as exc:
+                raise PersistenceError("advisor decision cannot be registered") from exc
+            if parsed_advisor.batch_id != batch_id or parsed_advisor.runtime.model_dump(
+                mode="json"
+            ) != self.metadata("advisor_runtime"):
+                raise PersistenceError("advisor decision cannot be registered")
+            validated_advisor = parsed_advisor.model_dump(mode="json")
         materialized = [
             item.as_dict() if isinstance(item, CarQuoteInput) else dict(item) for item in rows
         ]
@@ -392,11 +426,19 @@ class RunStore:
                 if batch_id is None or batch_id < 0:
                     raise ValueError("mapping samples require a non-negative batch_id")
                 self._connection.execute(
-                    "INSERT INTO batches(batch_id, status) VALUES (?, 'generated')",
-                    (batch_id,),
+                    """
+                    INSERT INTO batches(batch_id, status, advisor_json)
+                    VALUES (?, 'generated', ?)
+                    """,
+                    (
+                        batch_id,
+                        None if validated_advisor is None else _json_dumps(validated_advisor),
+                    ),
                 )
             elif batch_id is not None:
                 raise ValueError("evaluation samples cannot have a mapping batch_id")
+            elif advisor_decision is not None:
+                raise ValueError("evaluation samples cannot have an advisor decision")
 
             row = self._connection.execute(
                 "SELECT COALESCE(MAX(ordinal), -1) + 1 AS next_ordinal FROM samples"
@@ -737,7 +779,7 @@ class RunStore:
     def batch_history(self) -> list[dict[str, Any]]:
         with self._mutex:
             rows = self._connection.execute("""
-                SELECT batch_id, status, metrics_json
+                SELECT batch_id, status, metrics_json, advisor_json
                 FROM batches ORDER BY batch_id
                 """).fetchall()
         history: list[dict[str, Any]] = []
@@ -747,6 +789,14 @@ class RunStore:
                 {
                     "batch_id": int(row["batch_id"]),
                     "status": str(row["status"]),
+                    "advisor": (
+                        None
+                        if row["advisor_json"] is None
+                        else _json_loads(
+                            str(row["advisor_json"]),
+                            f"batch {row['batch_id']} advisor decision",
+                        )
+                    ),
                     "metrics": (
                         None
                         if raw_metrics is None
@@ -758,6 +808,19 @@ class RunStore:
                 }
             )
         return history
+
+    def advisor_decisions(self) -> list[dict[str, Any]]:
+        decisions: list[dict[str, Any]] = []
+        for batch in self.batch_history():
+            raw = batch["advisor"]
+            if raw is None:
+                continue
+            if not isinstance(raw, dict):
+                raise PersistenceError(
+                    f"batch {batch['batch_id']} advisor decision must be an object"
+                )
+            decisions.append(raw)
+        return decisions
 
     def next_batch_id(self) -> int:
         with self._mutex:
@@ -811,6 +874,27 @@ class RunStore:
                     raise PersistenceError(f"sample {sample.id} has an invalid premium")
             elif sample.premium is not None:
                 raise PersistenceError(f"pending sample {sample.id} unexpectedly has a premium")
+
+        for batch in self.batch_history():
+            advisor = batch["advisor"]
+            if advisor is None:
+                continue
+            try:
+                parsed_advisor = AdvisorDecisionRecord.model_validate(advisor, strict=True)
+            except (TypeError, ValueError) as exc:
+                raise PersistenceError(
+                    f"batch {batch['batch_id']} has a corrupt advisor decision"
+                ) from exc
+            stored_runtime = self.metadata("advisor_runtime")
+            if (
+                parsed_advisor.batch_id != batch["batch_id"]
+                or parsed_advisor.runtime.model_dump(mode="json") != stored_runtime
+                or any(
+                    boost.bin_id not in allowed_diagnostic_bin_ids(domain)
+                    for boost in parsed_advisor.response.bin_boosts
+                )
+            ):
+                raise PersistenceError(f"batch {batch['batch_id']} has a corrupt advisor decision")
 
         holdout_splits: tuple[SplitName, ...] = ("validation", "calibration", "audit")
         for split in holdout_splits:

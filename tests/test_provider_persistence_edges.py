@@ -162,6 +162,15 @@ def test_run_store_open_schema_rng_metadata_and_registration_edges(
     with pytest.raises(PersistenceError, match="missing required tables"):
         RunStore.open(incomplete)
 
+    legacy = tmp_path / "legacy-columns.sqlite3"
+    legacy_store = _store_with_holdouts(legacy)
+    legacy_store.close()
+    connection = sqlite3.connect(legacy)
+    connection.execute("ALTER TABLE batches DROP COLUMN advisor_json")
+    connection.close()
+    with pytest.raises(PersistenceError, match="incompatible batches schema"):
+        RunStore.open(legacy)
+
     assert json.loads(_json_dumps(np.asarray([1, 2]))) == [1, 2]
     assert json.loads(_json_dumps(np.int64(2))) == 2
     assert json.loads(_json_dumps(np.float64(2.5))) == 2.5

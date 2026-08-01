@@ -26,6 +26,12 @@ import skops
 import skops.io as sio
 from sklearn.base import BaseEstimator
 
+from pricing_mapper.advisor import (
+    AdvisorDecisionRecord,
+    allowed_diagnostic_bin_ids,
+    derived_advisor_seed,
+    system_prompt,
+)
 from pricing_mapper.config import MapperConfig, config_toml, load_config
 from pricing_mapper.domain import FIELD_ORDER, CarQuoteInput, DomainSpec, row_key, rows_json_schema
 from pricing_mapper.encoding import FeatureEncoder
@@ -258,6 +264,7 @@ def export_artifact(
     evaluation_report: Mapping[str, Any],
     selection_report: Mapping[str, Any],
     provider_summary: Mapping[str, Any],
+    optimizer_summary: Mapping[str, Any],
     warnings: Sequence[str],
     run_started_at_utc: str,
 ) -> Path:
@@ -320,6 +327,7 @@ def export_artifact(
                 "artifact_created_at_utc": created_at,
                 "config_fingerprint": config.fingerprint,
                 "provider": dict(provider_summary),
+                "optimizer": dict(optimizer_summary),
                 "git_revision": _git_revision(),
                 "python": platform.python_version(),
                 "platform": platform.platform(),
@@ -684,6 +692,7 @@ def validate_artifact(
         "artifact_created_at_utc",
         "config_fingerprint",
         "provider",
+        "optimizer",
         "git_revision",
         "python",
         "platform",
@@ -745,6 +754,7 @@ def validate_artifact(
         "audit_interval",
         "conformal",
         "latency",
+        "advisor",
         "promotion_gates",
         "early_stopped",
         "stop_reason",
@@ -753,6 +763,9 @@ def validate_artifact(
     }
     if not isinstance(evaluation, dict) or set(evaluation) != expected_evaluation_keys:
         raise ArtifactError("evaluation.json has missing or unknown fields")
+    optimizer = provenance["optimizer"]
+    if optimizer != evaluation["advisor"]:
+        raise ArtifactError("provenance optimizer summary differs from evaluation.json")
     if type(evaluation["schema_version"]) is not int or evaluation["schema_version"] != 1:
         raise ArtifactError("evaluation.json has an unsupported schema")
     design = evaluation["evaluation_design"]
@@ -832,11 +845,129 @@ def validate_artifact(
         <= audit_coverage
         <= config.evaluation.maximum_audit_coverage
     )
+    advisor = evaluation["advisor"]
+    if not isinstance(advisor, dict):
+        raise ArtifactError("evaluation.json advisor report is invalid")
+    expected_advisor_keys = {
+        "enabled",
+        "prompt_version",
+        "runtime",
+        "resource_mode",
+        "decision_count",
+        "total_latency_ms",
+        "maximum_response_latency_ms",
+        "latency_ceiling_ms",
+        "latency_passed",
+        "installed_model_bytes",
+        "maximum_resident_model_bytes",
+        "maximum_vram_bytes",
+        "memory_ceiling_bytes",
+        "memory_passed",
+        "data_shared",
+    }
+    if set(advisor) != expected_advisor_keys:
+        raise ArtifactError("evaluation.json advisor report is invalid")
+    enabled = config.optimizer.ollama is not None
+    if type(advisor["enabled"]) is not bool or advisor["enabled"] != enabled:
+        raise ArtifactError("evaluation.json advisor enablement differs from config.toml")
+    numeric_advisor_values = (
+        advisor["total_latency_ms"],
+        advisor["maximum_response_latency_ms"],
+        advisor["latency_ceiling_ms"],
+    )
+    try:
+        if any(
+            isinstance(value, bool) or not isinstance(value, (int, float))
+            for value in numeric_advisor_values
+        ):
+            raise TypeError("advisor timing must be numeric")
+        parsed_advisor_values = [float(value) for value in numeric_advisor_values]
+    except (TypeError, ValueError) as exc:
+        raise ArtifactError("evaluation.json advisor timing is invalid") from exc
+    if (
+        any(not math.isfinite(value) or value < 0.0 for value in parsed_advisor_values)
+        or parsed_advisor_values[0] < parsed_advisor_values[1]
+        or parsed_advisor_values[2] != 60_000.0
+        or type(advisor["latency_passed"]) is not bool
+        or advisor["latency_passed"] != (parsed_advisor_values[1] <= 60_000.0)
+        or type(advisor["memory_passed"]) is not bool
+        or type(advisor["decision_count"]) is not int
+        or advisor["decision_count"] < 0
+        or type(advisor["installed_model_bytes"]) is not int
+        or advisor["installed_model_bytes"] < 0
+        or type(advisor["maximum_resident_model_bytes"]) is not int
+        or advisor["maximum_resident_model_bytes"] < 0
+        or type(advisor["maximum_vram_bytes"]) is not int
+        or advisor["maximum_vram_bytes"] < 0
+        or type(advisor["memory_ceiling_bytes"]) is not int
+        or advisor["memory_ceiling_bytes"] != 8 * 1024**3
+        or advisor["memory_passed"]
+        != (advisor["maximum_resident_model_bytes"] <= advisor["memory_ceiling_bytes"])
+    ):
+        raise ArtifactError("evaluation.json advisor resource report is invalid")
+    expected_data_shared = {
+        "aggregate_diagnostics_only": True,
+        "raw_premiums": False,
+        "individual_quote_rows": False,
+        "calibration_data": False,
+        "audit_data": False,
+    }
+    if advisor["data_shared"] != expected_data_shared:
+        raise ArtifactError("evaluation.json advisor data-sharing attestation is invalid")
+    if enabled:
+        ollama = config.optimizer.ollama
+        if ollama is None:
+            raise AssertionError("enabled advisor lacks validated config")
+        runtime = advisor["runtime"]
+        expected_runtime_keys = {
+            "ollama_version",
+            "model",
+            "digest",
+            "quantization_level",
+            "model_size_bytes",
+            "resource_mode",
+        }
+        if (
+            advisor["prompt_version"] != ollama.prompt_version
+            or advisor["resource_mode"] != ollama.resource_mode
+            or not isinstance(runtime, dict)
+            or set(runtime) != expected_runtime_keys
+            or not isinstance(runtime.get("ollama_version"), str)
+            or not runtime.get("ollama_version")
+            or runtime.get("model") != ollama.model
+            or runtime.get("digest") != ollama.required_digest
+            or runtime.get("quantization_level") != "Q4_K_M"
+            or runtime.get("resource_mode") != ollama.resource_mode
+            or type(runtime.get("model_size_bytes")) is not int
+            or runtime.get("model_size_bytes", 0) <= 0
+            or advisor["installed_model_bytes"] != runtime.get("model_size_bytes")
+        ):
+            raise ArtifactError("evaluation.json advisor runtime differs from config.toml")
+    elif (
+        advisor["prompt_version"] is not None
+        or advisor["runtime"] is not None
+        or advisor["resource_mode"] is not None
+        or advisor["decision_count"] != 0
+        or advisor["installed_model_bytes"] != 0
+        or advisor["maximum_resident_model_bytes"] != 0
+        or advisor["maximum_vram_bytes"] != 0
+        or float(advisor["total_latency_ms"]) != 0.0
+        or float(advisor["maximum_response_latency_ms"]) != 0.0
+        or advisor["latency_passed"] is not True
+        or advisor["memory_passed"] is not True
+    ):
+        raise ArtifactError("evaluation.json contains advisor state while Ollama is disabled")
     gates = evaluation["promotion_gates"]
     expected_gates = {
         "audit_coverage_passed": coverage_passed,
         "latency_passed": latency_passed,
-        "eligible": coverage_passed and latency_passed,
+        "advisor_resources_passed": advisor["latency_passed"] and advisor["memory_passed"],
+        "eligible": (
+            coverage_passed
+            and latency_passed
+            and advisor["latency_passed"]
+            and advisor["memory_passed"]
+        ),
     }
     if (
         not isinstance(gates, dict)
@@ -851,6 +982,77 @@ def validate_artifact(
         or any(not isinstance(item, str) for item in evaluation["warnings"])
     ):
         raise ArtifactError("evaluation.json run state or warnings are invalid")
+    advisor_records: list[AdvisorDecisionRecord] = []
+    allowed_bins = allowed_diagnostic_bin_ids(domain)
+    for item in evaluation["batch_history"]:
+        if not isinstance(item, dict) or set(item) != {
+            "batch_id",
+            "status",
+            "advisor",
+            "metrics",
+        }:
+            raise ArtifactError("evaluation.json batch history is invalid")
+        if type(item["batch_id"]) is not int or item["batch_id"] < 0:
+            raise ArtifactError("evaluation.json batch history is invalid")
+        raw_decision = item["advisor"]
+        if raw_decision is None:
+            continue
+        try:
+            decision_record = AdvisorDecisionRecord.model_validate(raw_decision, strict=True)
+        except ValueError as exc:
+            raise ArtifactError("evaluation.json advisor decision is invalid") from exc
+        expected_prompt_hash = (
+            "sha256:"
+            + hashlib.sha256(system_prompt(decision_record.prompt_version).encode()).hexdigest()
+        )
+        if (
+            decision_record.batch_id != item["batch_id"]
+            or decision_record.generation.seed
+            != derived_advisor_seed(config.sampling.seed, item["batch_id"])
+            or decision_record.prompt_hash != expected_prompt_hash
+            or any(
+                boost.bin_id not in allowed_bins for boost in decision_record.response.bin_boosts
+            )
+        ):
+            raise ArtifactError("evaluation.json advisor decision is invalid")
+        advisor_records.append(decision_record)
+    if len(advisor_records) != advisor["decision_count"]:
+        raise ArtifactError("evaluation.json advisor decision count is inconsistent")
+    if enabled:
+        decision_total = sum(item.total_latency_ms for item in advisor_records)
+        decision_maximum = max(
+            (latency for item in advisor_records for latency in item.attempt_latencies_ms),
+            default=0.0,
+        )
+        decision_resident = max(
+            (item.memory.resident_size_bytes for item in advisor_records),
+            default=0,
+        )
+        decision_vram = max(
+            (item.memory.vram_size_bytes for item in advisor_records),
+            default=0,
+        )
+        if (
+            any(
+                item.runtime.model_dump(mode="json") != advisor["runtime"]
+                for item in advisor_records
+            )
+            or not math.isclose(
+                decision_total,
+                float(advisor["total_latency_ms"]),
+                rel_tol=0.0,
+                abs_tol=0.00001,
+            )
+            or not math.isclose(
+                decision_maximum,
+                float(advisor["maximum_response_latency_ms"]),
+                rel_tol=0.0,
+                abs_tol=0.00001,
+            )
+            or decision_resident != advisor["maximum_resident_model_bytes"]
+            or decision_vram != advisor["maximum_vram_bytes"]
+        ):
+            raise ArtifactError("evaluation.json advisor provenance is inconsistent")
 
     try:
         untrusted = sio.get_untrusted_types(file=target / "model.skops")

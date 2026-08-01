@@ -1,15 +1,21 @@
 config_version = 1
 
 [sampling]
-mapping_budget = 260
+mapping_budget = 208
 initial_size = 80
 batch_size = 20
 candidate_pool_size = 4000
 seed = 42
-strategy = "active"
-# The experimental local optimizer uses strategy = "bayesian". Enable its
-# Ollama advisor only through the fully pinned [optimizer.ollama] example in
-# config.ollama.example.toml; active remains the production default.
+strategy = "bayesian"
+
+[optimizer.ollama]
+endpoint = "http://127.0.0.1:11434"
+model = "granite4.1:3b"
+required_digest = "sha256:6fd349357287c7ffc9e38189a93b48ea175d24fc566b38f09cfc564fb7f303eb"
+prompt_version = "policy-advisor-v1"
+timeout_seconds = 60.0
+retry_count = 2
+resource_mode = "cpu-only-2cpu-8gb"
 
 [sampling.acquisition]
 greedy_diversity_weight = 0.50

@@ -27,6 +27,22 @@ class ProviderRejected(ProviderError):
     """A permanent provider rejection that must not be retried."""
 
 
+class AdvisorError(PricingMapperError, RuntimeError):
+    """The opt-in acquisition advisor failed closed."""
+
+
+class AdvisorUnavailable(AdvisorError):
+    """The configured advisor endpoint could not complete a request."""
+
+
+class AdvisorValidationError(AdvisorError):
+    """The advisor returned untrusted or contract-invalid data."""
+
+
+class AdvisorModelError(AdvisorError):
+    """The installed advisor model or runtime differs from its pin."""
+
+
 class PersistenceError(PricingMapperError):
     """The durable run journal is missing, corrupt, or incompatible."""
 

@@ -17,7 +17,9 @@ pricing-mapper config validate --config your-config.toml
 - `batch_size`: observations in each later acquisition batch.
 - `candidate_pool_size`: unique candidate rows scored per active batch.
 - `seed`: unsigned 32-bit deterministic seed.
-- `strategy`: `active`, `lhs`, or `random`.
+- `strategy`: `active`, `bayesian`, `lhs`, or `random`. `active` remains the
+  default. `bayesian` fits a deterministic local Gaussian process and uses its
+  posterior uncertainty plus validation-residual targeting.
 
 `sampling.acquisition.weights` accepts only `uncertainty`, `residual`,
 `breakpoint`, and `diversity`. Non-negative weights are normalized.
@@ -25,6 +27,38 @@ pricing-mapper config validate --config your-config.toml
 while constructing the focused portion of a batch. `focused_fraction` sets
 that portion; the remainder is a fresh LHS background so active learning does
 not sacrifice broad population coverage.
+
+## `optimizer.ollama` (optional and experimental)
+
+This table is accepted only with `sampling.strategy = "bayesian"`. Omitting it
+uses the fixed balanced Bayesian policy and makes no Ollama requests.
+
+- `endpoint`: Ollama HTTP(S) origin, normally `http://127.0.0.1:11434`.
+- `model`: a fully tagged local model name; the deployment example uses
+  `granite4.1:3b`.
+- `required_digest`: mandatory full lowercase `sha256:` model digest.
+- `prompt_version`: currently only `policy-advisor-v1`.
+- `timeout_seconds`: positive and no greater than 60 seconds.
+- `retry_count`: retries after the first attempt; fixed to at most two.
+- `resource_mode`: currently only `cpu-only-2cpu-8gb`.
+
+At startup and resume, the mapper checks `/api/version` and `/api/tags`,
+including model name, full digest, size, and `Q4_K_M` quantization. A runtime or
+model change fails closed. The advisor selects from five code-owned policies:
+
+| Policy | Uncertainty | Residual | LHS exploration |
+|---|---:|---:|---:|
+| `balanced` | 70% | 30% | 20% |
+| `uncertainty` | 85% | 15% | 20% |
+| `residual` | 55% | 45% | 20% |
+| `explore` | 60% | 20% | 40% |
+| `exploit` | 80% | 20% | 10% |
+
+It may also nominate at most three diagnostic bin IDs for a fixed 1.10 or 1.25
+boost. The model cannot provide fields, breakpoints, arbitrary weights,
+expressions, or quote inputs. Only aggregate, normalized diagnostics leave the
+mapper; raw premiums, individual rows, calibration data, and audit data do not.
+See `config.ollama.example.toml` and `deploy/ollama/README.md`.
 
 ## `model`
 

@@ -25,11 +25,25 @@ directories and never loads pickle.
   The final audit reports coverage and interval width.
 - Every completed quote is journaled transactionally in SQLite. Resume
   restores the mapping RNG and pending batch, reproducing an uninterrupted run.
+- An experimental Bayesian strategy keeps Gaussian-process scoring local. Its
+  opt-in, pinned Ollama advisor may choose only a finite acquisition policy from
+  aggregate diagnostics; it never receives raw premiums or individual rows.
 - Artifacts use `skops`, JSON/TOML metadata, SHA-256 hashes, an exclusive run
   lock, and atomic staging-directory rename. v0 pickle/state files are rejected.
 
 This project is an offline mapper, not an HTTP service. Hosted serving and
 vendor-specific integrations are intentionally outside v1.
+
+The active sampler remains the default. See
+[`config.ollama.example.toml`](config.ollama.example.toml) and
+[`deploy/ollama/README.md`](deploy/ollama/README.md) to provision and benchmark
+the experimental hybrid before considering production enablement.
+
+With `optimizer.ollama` configured, `pricing-mapper benchmark` switches to the
+five-seed release ablation: active at 260 mapping quotes, Bayesian-only at 208,
+and hybrid at 208. Its output keeps the advisor disabled for production unless
+all query-efficiency, accuracy, individual-seed, integrity, coverage, prediction
+latency, advisor latency, and memory gates pass.
 
 Model versions are deterministic hashes of model-affecting configuration,
 fit observations, numerical/model dependency versions, and conformal state;

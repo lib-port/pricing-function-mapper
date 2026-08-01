@@ -258,6 +258,76 @@
       "title": "ModelConfig",
       "type": "object"
     },
+    "OllamaConfig": {
+      "additionalProperties": false,
+      "description": "Pinned, opt-in local acquisition-policy advisor configuration.",
+      "properties": {
+        "endpoint": {
+          "default": "http://127.0.0.1:11434",
+          "title": "Endpoint",
+          "type": "string"
+        },
+        "model": {
+          "default": "granite4.1:3b",
+          "title": "Model",
+          "type": "string"
+        },
+        "prompt_version": {
+          "const": "policy-advisor-v1",
+          "default": "policy-advisor-v1",
+          "title": "Prompt Version",
+          "type": "string"
+        },
+        "required_digest": {
+          "title": "Required Digest",
+          "type": "string"
+        },
+        "resource_mode": {
+          "const": "cpu-only-2cpu-8gb",
+          "default": "cpu-only-2cpu-8gb",
+          "title": "Resource Mode",
+          "type": "string"
+        },
+        "retry_count": {
+          "default": 2,
+          "maximum": 2,
+          "minimum": 0,
+          "title": "Retry Count",
+          "type": "integer"
+        },
+        "timeout_seconds": {
+          "default": 60.0,
+          "exclusiveMinimum": 0.0,
+          "maximum": 60.0,
+          "title": "Timeout Seconds",
+          "type": "number"
+        }
+      },
+      "required": [
+        "required_digest"
+      ],
+      "title": "OllamaConfig",
+      "type": "object"
+    },
+    "OptimizerConfig": {
+      "additionalProperties": false,
+      "description": "Numerical optimizer extensions; all external advising is opt-in.",
+      "properties": {
+        "ollama": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/OllamaConfig"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "title": "OptimizerConfig",
+      "type": "object"
+    },
     "ProviderConfig": {
       "additionalProperties": false,
       "properties": {
@@ -346,6 +416,7 @@
           "default": "active",
           "enum": [
             "active",
+            "bayesian",
             "lhs",
             "random"
           ],
@@ -378,6 +449,9 @@
     },
     "model": {
       "$ref": "#/$defs/ModelConfig"
+    },
+    "optimizer": {
+      "$ref": "#/$defs/OptimizerConfig"
     },
     "provider": {
       "$ref": "#/$defs/ProviderConfig"

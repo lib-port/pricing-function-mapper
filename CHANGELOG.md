@@ -2,6 +2,23 @@
 
 All notable changes follow Keep a Changelog conventions.
 
+## Unreleased
+
+### Added
+
+- Deterministic Gaussian-process Bayesian acquisition with an optional,
+  digest-pinned Ollama policy advisor, aggregate-only diagnostics, strict
+  finite policy catalogue, atomic decision replay, and separate advisor
+  latency/resident-memory provenance.
+- Pinned two-CPU/8-GiB offline Ollama Compose deployment, verified Granite 4.1
+  provisioning, and a five-seed active/Bayesian/hybrid ablation gate.
+
+### Security
+
+- Advisor output is treated as untrusted. Duplicate keys, unknown fields,
+  non-finite values, invalid policies/bins/boosts, oversized replies, runtime
+  drift, and model-digest mismatches fail closed before quote consumption.
+
 ## 1.0.0 - 2026-07-29
 
 ### Added

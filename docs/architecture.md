@@ -31,6 +31,7 @@ flowchart LR
         Run --> Domain["Domain validation and sampling"]
         Run --> Provider["Provider executor"]
         Run --> Acquisition["Acquisition strategy"]
+        Run --> Guard["Aggregate-only advisor guard"]
         Run --> Models["Model search and final refit"]
         Run --> Evaluation["Evaluation and conformal calibration"]
         Engine["PricingEngine"] --> Domain
@@ -38,6 +39,7 @@ flowchart LR
     end
 
     Provider --> Callable["Trusted local quote callable"]
+    Guard -->|"schema-constrained policy only"| Ollama["Pinned local Ollama"]
     Run <--> State[("SQLite run journal")]
     Run --> Artifact[("Atomic v1 artifact directory")]
     Artifact --> Engine
@@ -57,7 +59,8 @@ output tree, benchmark output, and explicit CLI output paths.
 | `provider` | callable resolution, I/O checks, retries, telemetry | attempts and quote cache |
 | `persistence` | transactions, samples, RNG state, batches, run lock | `run.sqlite3` |
 | `acquisition` | uncertainty, residual, breakpoint, diversity scoring | selected mapping rows |
-| `models` | RF committee, HGB/ExtraTrees search, latency selection | fitted estimator |
+| `advisor` | aggregate diagnostics, strict policy schema, pinned Ollama client | decision provenance |
+| `models` | RF active committee, Bayesian GP, HGB/ExtraTrees search, latency selection | fitted estimator |
 | `evaluation` | metrics, bootstrap bounds, slices, conformal intervals | evaluation metadata |
 | `orchestration` | new/resumed run state machine and leakage boundaries | completed run state |
 | `artifact` | staging export, hashes, `skops` checks, compatibility | artifact directory |
@@ -80,7 +83,7 @@ flowchart TB
     EvalRows --> Audit["Final audit split"]
 
     Initial --> Mapping["Mapping observations"]
-    Mapping --> Committee["Deterministic RF committee"]
+    Mapping --> Committee["Local acquisition model: RF active or GP Bayesian"]
     Validation -->|residual guidance only| Acquisition["Acquisition scoring"]
     Committee --> Acquisition
     Acquisition --> Mapping
@@ -146,6 +149,14 @@ stateDiagram-v2
 SQLite batch states are `generated`, `quoted`, and `evaluated`. Sample states
 are `pending` and `complete`. A premium and its provider-specific quote-cache
 entry are committed in the same transaction.
+
+For Bayesian hybrid runs, the Gaussian process and all candidate scores remain
+inside Python. Before a post-initialization batch, Ollama sees only binned,
+normalized counts/statistics and score distributions. The accepted finite
+policy, prompt/request/response hashes, runtime/model pins, generation options,
+and timing commit in the same SQLite transaction as the selected rows. If all
+three attempts fail validation or transport, no batch is registered and no
+provider quote is consumed. Resume reuses a registered decision and batch.
 
 ## Crash recovery sequence
 
@@ -237,6 +248,9 @@ versioned JSON/TOML metadata. Pickle is never loaded.
   OpenMP thread.
 - Provider execution is sequential by default. Parallel execution requires
   explicit `thread_safe = True` and a declared maximum concurrency.
+- Ollama output is untrusted even when JSON Schema constrained. Unknown fields,
+  duplicate keys, non-finite values, unknown policies/bins, invalid boosts,
+  oversized responses, and model-digest mismatches fail closed.
 - One OS advisory lock serializes work for a run ID. Different run IDs may run
   concurrently if provider and machine capacity permit.
 

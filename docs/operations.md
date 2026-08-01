@@ -26,6 +26,8 @@ Keep these rules true during every procedure:
   provider is used.
 - Preserve the exact runtime for any deployed artifact. Cross-version sklearn
   loading is rejected.
+- For hybrid experiments, preserve the exact Ollama image, model digest, and
+  accepted decisions. Never edit or regenerate advisor journal records.
 
 ## Paths and naming
 
@@ -79,6 +81,30 @@ Use this before allocating any provider quote budget.
 - No other process will use the same run ID.
 
 ### Procedure
+
+For an approved hybrid experiment, provision the isolated local model before
+configuration validation:
+
+```bash
+./scripts/provision-ollama.sh
+```
+
+This is the only step requiring model-registry access. Runtime mapping uses the
+internal, cloud-disabled service described in `deploy/ollama/README.md`.
+
+Before enabling the advisor in a production mapping configuration, run the
+full ablation (15 runs: three modes across five fixed seeds):
+
+```bash
+pricing-mapper benchmark \
+  --config config.ollama.example.toml \
+  --output run-evidence/hybrid-ablation.json \
+  --enforce
+```
+
+The command fixes the active budget at 260 and both Bayesian budgets at 208.
+If the Ollama ablation gate fails, its report selects `bayesian` and records
+`advisor_enabled_for_production: false`.
 
 1. Activate the isolated runtime and record versions:
 
@@ -215,8 +241,12 @@ flowchart TD
 
 - SQLite integrity, schema, fingerprint, domain, provider identity, and runtime
   versions are checked before work continues.
+- Hybrid resume also verifies the live Ollama version, model name, full digest,
+  quantization, resource mode, and the runtime metadata stored at run start.
 - Rows transactionally committed as complete are not called again.
 - A registered partial batch resumes with the same rows and RNG state.
+- A registered hybrid batch reuses its stored advisor decision; it does not
+  query Ollama again.
 - If publication already completed, resume validates and returns that artifact.
 
 ### Do not resume when

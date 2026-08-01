@@ -5,10 +5,12 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import re
 import tomllib
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, Literal, Self
+from urllib.parse import urlsplit
 
 import tomli_w
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -129,7 +131,7 @@ class SamplingConfig(StrictConfigModel):
     batch_size: int = Field(default=20, ge=1)
     candidate_pool_size: int = Field(default=4_000, ge=10)
     seed: int = Field(default=42, ge=0, le=2**32 - 1)
-    strategy: Literal["active", "lhs", "random"] = "active"
+    strategy: Literal["active", "bayesian", "lhs", "random"] = "active"
     acquisition: AcquisitionConfig = Field(default_factory=AcquisitionConfig)
 
     @model_validator(mode="after")
@@ -270,6 +272,52 @@ class ArtifactConfig(StrictConfigModel):
         return self
 
 
+_FULL_DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
+_MODEL_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}:[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+
+
+class OllamaConfig(StrictConfigModel):
+    """Pinned, opt-in local acquisition-policy advisor configuration."""
+
+    endpoint: str = "http://127.0.0.1:11434"
+    model: str = "granite4.1:3b"
+    required_digest: str
+    prompt_version: Literal["policy-advisor-v1"] = "policy-advisor-v1"
+    timeout_seconds: float = Field(default=60.0, gt=0.0, le=60.0)
+    retry_count: int = Field(default=2, ge=0, le=2)
+    resource_mode: Literal["cpu-only-2cpu-8gb"] = "cpu-only-2cpu-8gb"
+
+    @model_validator(mode="after")
+    def validate_ollama(self) -> Self:
+        endpoint = urlsplit(self.endpoint)
+        if (
+            endpoint.scheme not in {"http", "https"}
+            or not endpoint.hostname
+            or endpoint.username is not None
+            or endpoint.password is not None
+            or endpoint.query
+            or endpoint.fragment
+            or endpoint.path not in {"", "/"}
+        ):
+            raise ValueError(
+                "optimizer.ollama.endpoint must be an HTTP(S) origin without credentials, "
+                "a path, query, or fragment"
+            )
+        if not _MODEL_NAME.fullmatch(self.model):
+            raise ValueError("optimizer.ollama.model must be a fully tagged Ollama model name")
+        if not _FULL_DIGEST.fullmatch(self.required_digest):
+            raise ValueError(
+                "optimizer.ollama.required_digest must be a full lowercase sha256 digest"
+            )
+        return self
+
+
+class OptimizerConfig(StrictConfigModel):
+    """Numerical optimizer extensions; all external advising is opt-in."""
+
+    ollama: OllamaConfig | None = None
+
+
 class MapperConfig(StrictConfigModel):
     """Stable v1 configuration consumed by :class:`MappingRun`."""
 
@@ -280,6 +328,16 @@ class MapperConfig(StrictConfigModel):
     provider: ProviderConfig = Field(default_factory=ProviderConfig)
     artifact: ArtifactConfig = Field(default_factory=ArtifactConfig)
     domain: DomainConfig = Field(default_factory=DomainConfig)
+    optimizer: OptimizerConfig = Field(default_factory=OptimizerConfig)
+
+    @model_validator(mode="after")
+    def validate_optimizer(self) -> Self:
+        if self.optimizer.ollama is not None and self.sampling.strategy != "bayesian":
+            raise ValueError(
+                "optimizer.ollama requires sampling.strategy = 'bayesian' so the advisor "
+                "can only tune the local numerical optimizer"
+            )
+        return self
 
     @property
     def resolved_domain(self) -> DomainSpec:

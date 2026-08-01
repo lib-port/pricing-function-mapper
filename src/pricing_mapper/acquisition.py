@@ -159,29 +159,55 @@ class AcquisitionStrategy:
             raise ValueError("acquisition selection count cannot be negative")
         if count == 0 or len(context.candidate_rows) == 0:
             return []
-        count = min(count, len(context.candidate_rows))
         base, _ = self.combined_scores(context)
-        available = np.ones(len(base), dtype=bool)
-        selected: list[int] = []
-        min_distance_to_selected = np.full(len(base), np.inf, dtype=float)
-        diversity_weight = self.config.greedy_diversity_weight
+        return select_from_base_scores(
+            context,
+            base,
+            count,
+            diversity_weight=self.config.greedy_diversity_weight,
+        )
 
-        for _ in range(count):
-            if selected:
-                diversity = normalize01(min_distance_to_selected)
-                scores = (1.0 - diversity_weight) * base + diversity_weight * diversity
-            else:
-                scores = base.copy()
-            scores[~available] = -np.inf
-            chosen = int(np.argmax(scores))
-            if not np.isfinite(scores[chosen]):
-                break
-            selected.append(chosen)
-            available[chosen] = False
-            differences = context.candidate_features - context.candidate_features[chosen]
-            distances = np.sqrt(np.sum(differences * differences, axis=1))
-            min_distance_to_selected = np.minimum(min_distance_to_selected, distances)
-        return selected
+
+def select_from_base_scores(
+    context: AcquisitionContext,
+    base_scores: np.ndarray,
+    count: int,
+    *,
+    diversity_weight: float,
+) -> list[int]:
+    """Greedily select local scores with bounded max-min diversity."""
+
+    if count < 0:
+        raise ValueError("acquisition selection count cannot be negative")
+    if not 0.0 <= diversity_weight <= 1.0:
+        raise ValueError("acquisition diversity weight must be within [0, 1]")
+    base = np.asarray(base_scores, dtype=float)
+    expected = (len(context.candidate_rows),)
+    if base.shape != expected or not np.all(np.isfinite(base)):
+        raise ValueError("base acquisition scores must be finite and aligned")
+    if count == 0 or len(context.candidate_rows) == 0:
+        return []
+    count = min(count, len(context.candidate_rows))
+    available = np.ones(len(base), dtype=bool)
+    selected: list[int] = []
+    min_distance_to_selected = np.full(len(base), np.inf, dtype=float)
+
+    for _ in range(count):
+        if selected:
+            diversity = normalize01(min_distance_to_selected)
+            scores = (1.0 - diversity_weight) * base + diversity_weight * diversity
+        else:
+            scores = base.copy()
+        scores[~available] = -np.inf
+        chosen = int(np.argmax(scores))
+        if not np.isfinite(scores[chosen]):
+            break
+        selected.append(chosen)
+        available[chosen] = False
+        differences = context.candidate_features - context.candidate_features[chosen]
+        distances = np.sqrt(np.sum(differences * differences, axis=1))
+        min_distance_to_selected = np.minimum(min_distance_to_selected, distances)
+    return selected
 
 
 def build_context(

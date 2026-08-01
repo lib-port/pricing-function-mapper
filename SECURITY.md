@@ -20,6 +20,11 @@ Security fixes are provided for the latest v1 minor/patch release.
   artifacts necessarily contain sampled quote inputs and premiums; protect
   them according to their sensitivity.
 - Cross-version sklearn loading is rejected.
+- The optional Ollama advisor is untrusted and cannot quote, read mapper
+  outputs, or access provider credentials. It receives only strict aggregate
+  diagnostics and can select only code-owned policies and existing bin IDs.
+  Runtime and model digests are verified; invalid or unavailable responses fail
+  closed before batch registration.
 
 Keep dependencies patched, run `pip-audit`, review custom provider code, and
 do not weaken hash, schema, or trust checks to recover a damaged artifact.

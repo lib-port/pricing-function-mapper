@@ -18,7 +18,19 @@ from typing import Any
 import numpy as np
 import sklearn
 
-from pricing_mapper.acquisition import AcquisitionStrategy, build_context
+from pricing_mapper.acquisition import AcquisitionContext, AcquisitionStrategy, build_context
+from pricing_mapper.advisor import (
+    AdvisorDecision,
+    DiagnosticBundle,
+    OllamaPolicyAdvisor,
+    OllamaRuntime,
+    PolicyAdvisor,
+    PolicyResponse,
+    apply_policy,
+    balanced_policy,
+    build_diagnostic_summary,
+    validate_advisor_decision,
+)
 from pricing_mapper.artifact import export_artifact, validate_artifact
 from pricing_mapper.config import MapperConfig, config_toml
 from pricing_mapper.domain import (
@@ -39,9 +51,10 @@ from pricing_mapper.evaluation import (
     interval_report,
     regression_report,
 )
-from pricing_mapper.exceptions import PersistenceError
+from pricing_mapper.exceptions import AdvisorModelError, AdvisorValidationError, PersistenceError
 from pricing_mapper.models import (
     AcquisitionCommittee,
+    BayesianAcquisitionModel,
     ModelKind,
     finite_nonnegative_targets,
     fit_monitor_model,
@@ -220,6 +233,7 @@ class MappingRun:
         provider: QuoteProvider | None = None,
         run_id: str | None = None,
         logger: logging.Logger | None = None,
+        advisor: PolicyAdvisor | None = None,
     ) -> None:
         self.config = config
         self.domain = config.resolved_domain
@@ -236,6 +250,15 @@ class MappingRun:
         self.run_dir = self.output_dir / config.artifact.state_dir_name / self.run_id
         self.state_database = self.run_dir / "run.sqlite3"
         self.lock_path = self.output_dir / ".locks" / f"{self.run_id}.lock"
+        advisor_config = config.optimizer.ollama
+        if advisor is not None and advisor_config is None:
+            raise ValueError("an advisor implementation requires optimizer.ollama configuration")
+        self.advisor = (
+            advisor
+            if advisor is not None
+            else (None if advisor_config is None else OllamaPolicyAdvisor(advisor_config))
+        )
+        self._advisor_runtime: OllamaRuntime | None = None
 
     def run(
         self,
@@ -253,6 +276,7 @@ class MappingRun:
             )
 
         with RunLock(self.lock_path):
+            self._advisor_runtime = self._verify_advisor()
             if self.artifact_dir.exists():
                 if not resume:
                     raise FileExistsError(
@@ -271,6 +295,9 @@ class MappingRun:
                     raise PersistenceError(
                         "completed artifact provider identity differs from the resume provider"
                     )
+                if self.state_database.is_file():
+                    with RunStore.open(self.state_database) as completed_store:
+                        self._validate_advisor_runtime(completed_store, resume=True)
                 if seed_records is not None:
                     with RunStore.open(self.state_database) as completed_store:
                         expected_digest = completed_store.metadata("seed_data_digest")
@@ -296,6 +323,7 @@ class MappingRun:
 
             store = self._open_store(resume=resume)
             try:
+                self._validate_advisor_runtime(store, resume=resume)
                 self._ensure_initialized(store)
                 store.validate_integrity(
                     config_fingerprint=self.config.fingerprint,
@@ -353,6 +381,35 @@ class MappingRun:
         store.set_metadata("run_id", self.run_id)
         store.set_metadata("run_started_at_utc", datetime.now(UTC).isoformat())
         return store
+
+    def _verify_advisor(self) -> OllamaRuntime | None:
+        if self.advisor is None:
+            return None
+        runtime = self.advisor.verify()
+        if not isinstance(runtime, OllamaRuntime):
+            raise AdvisorModelError("advisor verification returned invalid runtime metadata")
+        configured = self.config.optimizer.ollama
+        if configured is None:
+            raise AssertionError("advisor exists without configuration")
+        if (
+            runtime.model != configured.model
+            or runtime.digest != configured.required_digest
+            or runtime.quantization_level != "Q4_K_M"
+            or runtime.resource_mode != configured.resource_mode
+        ):
+            raise AdvisorModelError("verified advisor runtime differs from configuration")
+        return runtime
+
+    def _validate_advisor_runtime(self, store: RunStore, *, resume: bool) -> None:
+        current = None if self._advisor_runtime is None else self._advisor_runtime.to_record()
+        stored = store.metadata("advisor_runtime", None)
+        if resume:
+            if stored != current:
+                raise PersistenceError(
+                    "resume Ollama runtime, model, or digest differs from the original run"
+                )
+        else:
+            store.set_metadata("advisor_runtime", current)
 
     def _ensure_initialized(self, store: RunStore) -> None:
         """Recover safely if a process stopped during new-run initialization."""
@@ -463,13 +520,21 @@ class MappingRun:
             mapping_records = store.samples("mapping", completed_only=True)
             remaining = self.config.sampling.mapping_budget - len(mapping_records)
             count = min(self.config.sampling.batch_size, remaining)
-            next_rows = self._propose(mapping_records, count, mapping_rng, store)
+            batch_id = store.next_batch_id()
+            next_rows, advisor_decision = self._propose(
+                mapping_records,
+                count,
+                mapping_rng,
+                store,
+                batch_id=batch_id,
+            )
             store.register_samples(
                 "mapping",
                 next_rows,
-                batch_id=store.next_batch_id(),
+                batch_id=batch_id,
                 source=f"{self.config.sampling.strategy}_acquisition",
                 mapping_rng_state=mapping_rng.bit_generator.state,
+                advisor_decision=advisor_decision,
             )
             self._quote_pending(store, splits=("mapping",))
             tracker = self._evaluate_quoted_batches(store)
@@ -487,24 +552,36 @@ class MappingRun:
         count: int,
         rng: np.random.Generator,
         store: RunStore,
-    ) -> list[CarQuoteInput]:
+        *,
+        batch_id: int,
+    ) -> tuple[list[CarQuoteInput], Mapping[str, Any] | None]:
         used = store.all_row_hashes()
         strategy = self.config.sampling.strategy
         if strategy in {"lhs", "random"}:
-            return _unique_samples(
-                self.domain,
-                count=count,
-                rng=rng,
-                used_hashes=used,
-                method=strategy,
+            return (
+                _unique_samples(
+                    self.domain,
+                    count=count,
+                    rng=rng,
+                    used_hashes=used,
+                    method=strategy,
+                ),
+                None,
             )
 
         mapping_rows, mapping_targets = _records_data(mapping_records)
-        committee = AcquisitionCommittee(
-            self.config.model,
-            self.domain,
-            self.config.sampling.seed,
-        ).fit(mapping_rows, mapping_targets)
+        numerical_model: AcquisitionCommittee | BayesianAcquisitionModel
+        if strategy == "bayesian":
+            numerical_model = BayesianAcquisitionModel(
+                self.domain,
+                self.config.sampling.seed,
+            ).fit(mapping_rows, mapping_targets)
+        else:
+            numerical_model = AcquisitionCommittee(
+                self.config.model,
+                self.domain,
+                self.config.sampling.seed,
+            ).fit(mapping_rows, mapping_targets)
         pool = _unique_samples(
             self.domain,
             count=self.config.sampling.candidate_pool_size,
@@ -513,10 +590,10 @@ class MappingRun:
             method="lhs",
         )
         pool_rows = [quote.as_dict() for quote in pool]
-        _, standard_deviation = committee.predict(pool_rows)
+        _, standard_deviation = numerical_model.predict(pool_rows)
         validation_records = store.samples("validation", completed_only=True)
         validation_rows, validation_targets = _records_data(validation_records)
-        validation_predictions, _ = committee.predict(validation_rows)
+        validation_predictions, _ = numerical_model.predict(validation_rows)
         residuals = validation_targets - validation_predictions
         context = build_context(
             candidate_rows=pool_rows,
@@ -526,6 +603,17 @@ class MappingRun:
             domain=self.domain,
             residual_anchor_rows=validation_rows,
         )
+        if strategy == "bayesian":
+            return self._apply_bayesian_policy(
+                context=context,
+                pool=pool,
+                validation_rows=validation_rows,
+                count=count,
+                rng=rng,
+                used_hashes=used,
+                store=store,
+                batch_id=batch_id,
+            )
         focused_count = max(
             1,
             min(
@@ -544,7 +632,7 @@ class MappingRun:
         focused = [pool[index] for index in indices]
         background_count = count - focused_count
         if background_count == 0:
-            return focused
+            return focused, None
         background = _unique_samples(
             self.domain,
             count=background_count,
@@ -552,7 +640,77 @@ class MappingRun:
             used_hashes=used | {row_key(quote) for quote in focused},
             method="lhs",
         )
-        return [*focused, *background]
+        return [*focused, *background], None
+
+    def _apply_bayesian_policy(
+        self,
+        *,
+        context: AcquisitionContext,
+        pool: Sequence[CarQuoteInput],
+        validation_rows: Sequence[Mapping[str, Any]],
+        count: int,
+        rng: np.random.Generator,
+        used_hashes: set[str],
+        store: RunStore,
+        batch_id: int,
+    ) -> tuple[list[CarQuoteInput], Mapping[str, Any] | None]:
+        diagnostics: DiagnosticBundle = build_diagnostic_summary(
+            context=context,
+            validation_rows=validation_rows,
+            batch_history=store.batch_history(),
+            domain=self.domain,
+        )
+        decision: AdvisorDecision | None = None
+        decision_record: dict[str, Any] | None = None
+        response: PolicyResponse
+        if self.advisor is None:
+            response = balanced_policy()
+        else:
+            if self._advisor_runtime is None:
+                raise AdvisorModelError("advisor runtime was not verified before acquisition")
+            decision = self.advisor.advise(
+                diagnostics.summary,
+                allowed_bin_ids=diagnostics.allowed_bin_ids,
+                run_seed=self.config.sampling.seed,
+                batch_id=batch_id,
+                runtime=self._advisor_runtime,
+            )
+            if not isinstance(decision, AdvisorDecision) or not isinstance(
+                decision.response, PolicyResponse
+            ):
+                raise AdvisorValidationError("advisor returned an invalid decision object")
+            response = decision.response
+            decision_record = validate_advisor_decision(
+                decision,
+                allowed_bin_ids=diagnostics.allowed_bin_ids,
+                batch_id=batch_id,
+                run_seed=self.config.sampling.seed,
+                runtime=self._advisor_runtime,
+            )
+        application = apply_policy(
+            context,
+            diagnostics,
+            response,
+            count=count,
+            greedy_diversity_weight=self.config.sampling.acquisition.greedy_diversity_weight,
+        )
+        focused = [pool[index] for index in application.selected_indices]
+        if application.exploration_count == 0:
+            selected = focused
+        else:
+            background = _unique_samples(
+                self.domain,
+                count=application.exploration_count,
+                rng=rng,
+                used_hashes=used_hashes | {row_key(quote) for quote in focused},
+                method="lhs",
+            )
+            selected = [*focused, *background]
+        if len(selected) != count:
+            raise RuntimeError(
+                f"Bayesian acquisition selected {len(selected)} rows, expected {count}"
+            )
+        return selected, decision_record
 
     def _tracker_from_history(self, store: RunStore) -> EarlyStopTracker:
         tracker = EarlyStopTracker()
@@ -728,6 +886,10 @@ class MappingRun:
             <= self.config.evaluation.maximum_audit_coverage
         )
         latency_passed = final_latency <= self.config.model.max_p95_latency_ms
+        advisor_report = self._advisor_report(store)
+        advisor_resources_passed = bool(
+            advisor_report["latency_passed"] and advisor_report["memory_passed"]
+        )
         warnings: list[str] = []
         if len(calibration_rows) < 20:
             warnings.append(
@@ -742,6 +904,10 @@ class MappingRun:
         if not latency_passed:
             warnings.append(
                 "Final refit exceeds the configured warm single-row p95 latency ceiling."
+            )
+        if not advisor_resources_passed:
+            warnings.append(
+                "Ollama advisory latency or model footprint exceeds the experimental gate."
             )
         early_stopped = bool(store.metadata("early_stopped", False))
         evaluation_report: dict[str, Any] = {
@@ -769,10 +935,12 @@ class MappingRun:
                 "ceiling_ms": self.config.model.max_p95_latency_ms,
                 "passed": latency_passed,
             },
+            "advisor": advisor_report,
             "promotion_gates": {
                 "audit_coverage_passed": coverage_passed,
                 "latency_passed": latency_passed,
-                "eligible": coverage_passed and latency_passed,
+                "advisor_resources_passed": advisor_resources_passed,
+                "eligible": coverage_passed and latency_passed and advisor_resources_passed,
             },
             "early_stopped": early_stopped,
             "stop_reason": store.metadata("stop_reason"),
@@ -799,6 +967,7 @@ class MappingRun:
             evaluation_report=evaluation_report,
             selection_report=selection.report(),
             provider_summary=store.provider_summary(),
+            optimizer_summary=advisor_report,
             warnings=warnings,
             run_started_at_utc=str(store.metadata("run_started_at_utc")),
         )
@@ -813,6 +982,105 @@ class MappingRun:
             early_stopped=early_stopped,
             evaluation_report=evaluation_report,
         )
+
+    def _advisor_report(self, store: RunStore) -> dict[str, Any]:
+        configured = self.config.optimizer.ollama
+        decisions = store.advisor_decisions()
+        if configured is None:
+            if decisions:
+                raise PersistenceError("run contains advisor decisions while Ollama is disabled")
+            return {
+                "enabled": False,
+                "prompt_version": None,
+                "runtime": None,
+                "resource_mode": None,
+                "decision_count": 0,
+                "total_latency_ms": 0.0,
+                "maximum_response_latency_ms": 0.0,
+                "latency_ceiling_ms": 60_000.0,
+                "latency_passed": True,
+                "installed_model_bytes": 0,
+                "maximum_resident_model_bytes": 0,
+                "maximum_vram_bytes": 0,
+                "memory_ceiling_bytes": 8 * 1024**3,
+                "memory_passed": True,
+                "data_shared": {
+                    "aggregate_diagnostics_only": True,
+                    "raw_premiums": False,
+                    "individual_quote_rows": False,
+                    "calibration_data": False,
+                    "audit_data": False,
+                },
+            }
+        runtime = store.metadata("advisor_runtime")
+        if not isinstance(runtime, dict):
+            raise PersistenceError("run is missing verified advisor runtime metadata")
+        attempt_latencies: list[float] = []
+        resident_sizes: list[int] = []
+        vram_sizes: list[int] = []
+        total_latency = 0.0
+        for decision in decisions:
+            values = decision.get("attempt_latencies_ms")
+            total = decision.get("total_latency_ms")
+            if (
+                not isinstance(values, list)
+                or isinstance(total, bool)
+                or not isinstance(total, (int, float))
+            ):
+                raise PersistenceError("stored advisor timing metadata is corrupt")
+            parsed_values = [float(item) for item in values]
+            if any(not math.isfinite(item) or item < 0.0 for item in parsed_values):
+                raise PersistenceError("stored advisor timing metadata is corrupt")
+            parsed_total = float(total)
+            if not math.isfinite(parsed_total) or parsed_total < 0.0:
+                raise PersistenceError("stored advisor timing metadata is corrupt")
+            attempt_latencies.extend(parsed_values)
+            total_latency += parsed_total
+            memory = decision.get("memory")
+            if not isinstance(memory, dict):
+                raise PersistenceError("stored advisor memory metadata is corrupt")
+            resident = memory.get("resident_size_bytes")
+            vram = memory.get("vram_size_bytes")
+            if (
+                isinstance(resident, bool)
+                or not isinstance(resident, int)
+                or resident <= 0
+                or isinstance(vram, bool)
+                or not isinstance(vram, int)
+                or vram < 0
+            ):
+                raise PersistenceError("stored advisor memory metadata is corrupt")
+            resident_sizes.append(resident)
+            vram_sizes.append(vram)
+        maximum_latency = max(attempt_latencies, default=0.0)
+        installed_size = runtime.get("model_size_bytes")
+        if isinstance(installed_size, bool) or not isinstance(installed_size, int):
+            raise PersistenceError("stored advisor model footprint is corrupt")
+        memory_ceiling = 8 * 1024**3
+        maximum_resident = max(resident_sizes, default=0)
+        return {
+            "enabled": True,
+            "prompt_version": configured.prompt_version,
+            "runtime": runtime,
+            "resource_mode": configured.resource_mode,
+            "decision_count": len(decisions),
+            "total_latency_ms": float(round(total_latency, 6)),
+            "maximum_response_latency_ms": float(round(maximum_latency, 6)),
+            "latency_ceiling_ms": 60_000.0,
+            "latency_passed": maximum_latency <= 60_000.0,
+            "installed_model_bytes": installed_size,
+            "maximum_resident_model_bytes": maximum_resident,
+            "maximum_vram_bytes": max(vram_sizes, default=0),
+            "memory_ceiling_bytes": memory_ceiling,
+            "memory_passed": maximum_resident <= memory_ceiling,
+            "data_shared": {
+                "aggregate_diagnostics_only": True,
+                "raw_premiums": False,
+                "individual_quote_rows": False,
+                "calibration_data": False,
+                "audit_data": False,
+            },
+        }
 
     def _model_version(
         self,
@@ -834,6 +1102,7 @@ class MappingRun:
             "threadpoolctl_version": importlib.metadata.version("threadpoolctl"),
             "sampling_seed": self.config.sampling.seed,
             "model_config": self.config.model.model_dump(mode="json"),
+            "optimizer_config": self.config.optimizer.model_dump(mode="json"),
             "domain": self.domain.to_dict(),
             "selection": selected,
             "fit_observations": [

@@ -14,6 +14,9 @@ from pricing_mapper.config import (
     DomainConfig,
     EvaluationConfig,
     MapperConfig,
+    OllamaConfig,
+    OptimizerConfig,
+    SamplingConfig,
     config_json_schema,
     config_toml,
     load_config,
@@ -154,3 +157,23 @@ def test_generated_config_schema_forbids_unknown_settings() -> None:
     serialized = json.dumps(schema)
     assert "mapping_budget" in serialized
     assert "max_p95_latency_ms" in serialized
+    assert "required_digest" in serialized
+
+
+def test_ollama_optimizer_is_opt_in_pinned_and_fingerprinted() -> None:
+    digest = "sha256:" + "a" * 64
+    ollama = OllamaConfig(required_digest=digest)
+    configured = MapperConfig(
+        sampling=SamplingConfig(strategy="bayesian"),
+        optimizer=OptimizerConfig(ollama=ollama),
+    )
+    assert configured.optimizer.ollama == ollama
+    assert configured.fingerprint != MapperConfig().fingerprint
+    with pytest.raises(ValidationError, match=r"requires sampling\.strategy"):
+        MapperConfig(optimizer=OptimizerConfig(ollama=ollama))
+    with pytest.raises(ValidationError, match="full lowercase"):
+        OllamaConfig(required_digest="6fd349357287")
+    with pytest.raises(ValidationError, match="origin"):
+        OllamaConfig(required_digest=digest, endpoint="http://user:pass@localhost/path")
+    with pytest.raises(ValidationError, match="60"):
+        OllamaConfig(required_digest=digest, timeout_seconds=61.0)

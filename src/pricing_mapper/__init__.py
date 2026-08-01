@@ -8,6 +8,8 @@ from pricing_mapper.config import (
     EvaluationConfig,
     MapperConfig,
     ModelConfig,
+    OllamaConfig,
+    OptimizerConfig,
     ProviderConfig,
     SamplingConfig,
     load_config,
@@ -15,6 +17,10 @@ from pricing_mapper.config import (
 from pricing_mapper.domain import CarQuoteInput, DomainSpec
 from pricing_mapper.engine import PricingEngine
 from pricing_mapper.exceptions import (
+    AdvisorError,
+    AdvisorModelError,
+    AdvisorUnavailable,
+    AdvisorValidationError,
     ArtifactError,
     ConfigurationError,
     DomainValidationError,
@@ -30,6 +36,10 @@ from pricing_mapper.types import Prediction, QuoteProvider
 
 __all__ = [
     "AcquisitionConfig",
+    "AdvisorError",
+    "AdvisorModelError",
+    "AdvisorUnavailable",
+    "AdvisorValidationError",
     "ArtifactConfig",
     "ArtifactError",
     "CarQuoteInput",
@@ -44,6 +54,8 @@ __all__ = [
     "MappingResult",
     "MappingRun",
     "ModelConfig",
+    "OllamaConfig",
+    "OptimizerConfig",
     "PersistenceError",
     "Prediction",
     "PricingEngine",

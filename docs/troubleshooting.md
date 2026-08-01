@@ -49,3 +49,19 @@ risk slices, and rerun under a new ID. Do not tune directly to audit outcomes.
 Restore an unmodified artifact directory. Every listed file is hashed and
 unlisted files are rejected. sklearn cross-version loading is unsupported;
 install the exact version in `dependencies.json` or retrain.
+
+## Ollama model verification failed
+
+Hybrid runs check the local model before any provider calls. Confirm the
+container is reachable only at `127.0.0.1:11434`, then rerun
+`./scripts/provision-ollama.sh`. Do not shorten or update the configured digest.
+A missing model, wrong `Q4_K_M` quantization, changed Ollama version on resume,
+or digest mismatch requires correction before the same run can continue.
+
+## Advisor failed closed
+
+The mapper retries a malformed, oversized, timed-out, or unavailable advisory
+response twice. After the third failure it deliberately leaves no new mapping
+batch and consumes no provider quotes. Preserve the journal, restore the exact
+pinned runtime, and use `map resume`. Do not replace the advisor decision with a
+handwritten policy.
