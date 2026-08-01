@@ -23,8 +23,13 @@ Security fixes are provided for the latest v1 minor/patch release.
 - The optional Ollama advisor is untrusted and cannot quote, read mapper
   outputs, or access provider credentials. It receives only strict aggregate
   diagnostics and can select only code-owned policies and existing bin IDs.
-  Runtime and model digests are verified; invalid or unavailable responses fail
-  closed before batch registration.
+  Its endpoint must be a literal IPv4 or IPv6 loopback HTTP origin, and HTTP
+  proxies and redirects are disabled. The supplied deployment pins the runtime
+  image and model digests; startup verifies model metadata and records the
+  runtime version, and resume requires the same runtime and model. Invalid or
+  unavailable responses fail closed before batch registration.
 
-Keep dependencies patched, run `pip-audit`, review custom provider code, and
-do not weaken hash, schema, or trust checks to recover a damaged artifact.
+Keep dependencies patched, audit both the declared project (`python -m
+pip_audit . --strict`) and installed development environment (`python -m
+pip_audit --skip-editable`), review custom provider code, and do not weaken
+hash, schema, or trust checks to recover a damaged artifact.

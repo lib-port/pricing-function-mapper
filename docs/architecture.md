@@ -251,6 +251,9 @@ versioned JSON/TOML metadata. Pickle is never loaded.
 - Ollama output is untrusted even when JSON Schema constrained. Unknown fields,
   duplicate keys, non-finite values, unknown policies/bins, invalid boosts,
   oversized responses, and model-digest mismatches fail closed.
+- Ollama requests may target only literal IPv4/IPv6 loopback HTTP origins;
+  environment proxies are disabled, and redirects are refused before any
+  redirected connection is attempted.
 - One OS advisory lock serializes work for a run ID. Different run IDs may run
   concurrently if provider and machine capacity permit.
 

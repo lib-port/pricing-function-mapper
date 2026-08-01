@@ -14,6 +14,7 @@ from pricing_mapper.domain import FIELD_ORDER
 from pricing_mapper.engine import PricingEngine
 from pricing_mapper.exceptions import ArtifactError, DomainValidationError, LegacyArtifactError
 from pricing_mapper.orchestration import MappingRun
+from pricing_mapper.provider import reference_car_quote
 
 
 def _rewrite_manifest_hash(artifact: Path, name: str) -> None:
@@ -56,6 +57,57 @@ def test_extra_trees_artifact_round_trip(tmp_path: Path) -> None:
     inspection = validate_artifact(result.artifact_dir)
     assert inspection["model_kind"] == "extra_trees"
     assert PricingEngine.load(result.artifact_dir).model_kind == "extra_trees"
+
+
+def test_model_card_contains_complete_immutable_run_evidence(
+    completed_run: tuple[Any, Any],
+) -> None:
+    _, result = completed_run
+    artifact = result.artifact_dir
+    card = (artifact / "model-card.md").read_text(encoding="utf-8")
+    evaluation = json.loads((artifact / "evaluation.json").read_text(encoding="utf-8"))
+    selection = json.loads((artifact / "model.json").read_text(encoding="utf-8"))["selection"]
+    dependencies = json.loads((artifact / "dependencies.json").read_text(encoding="utf-8"))
+
+    for heading in (
+        "## Model selection",
+        "## Conformal interval",
+        "## Independent audit",
+        "### Predefined risk slices",
+        "## Promotion gates",
+        "## Provider provenance",
+        "## Runtime dependencies",
+        "## Warnings",
+        "## Limitations and governance",
+    ):
+        assert heading in card
+    assert str(selection["selected"]["validation_mae"]) in card
+    assert str(evaluation["audit"]["metrics"]["p95_absolute_error"]) in card
+    assert str(evaluation["audit_interval"]["median_width"]) in card
+    assert "young_driver_under_25" in card
+    assert "pricing_mapper.reference_car_quote.v1" in card
+    for name, version in dependencies.items():
+        assert f"`{name}`: `{version}`" in card
+    assert "Do not edit this hash-protected artifact" in card
+    assert validate_artifact(artifact)["valid"]
+
+
+def test_model_card_records_custom_provider_identity(tmp_path: Path) -> None:
+    from conftest import tiny_config
+
+    class CustomProvider:
+        provider_id = "test.custom-provider.v2"
+
+        def __call__(self, quote: Any) -> float:
+            return reference_car_quote(quote)
+
+    result = MappingRun(
+        tiny_config(tmp_path, seed=31),
+        provider=CustomProvider(),
+        run_id="custom-provider-card",
+    ).run()
+    card = (result.artifact_dir / "model-card.md").read_text(encoding="utf-8")
+    assert "Identity: `test.custom-provider.v2`" in card
 
 
 def test_tampered_and_unlisted_artifacts_are_rejected(

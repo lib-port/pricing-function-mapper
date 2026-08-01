@@ -18,7 +18,7 @@ from pricing_mapper.types import Prediction
 
 
 class PricingEngine:
-    """Supported v1 inference entry point with calibrated 90% intervals."""
+    """Supported v1 inference entry point with configured conformal intervals."""
 
     def __init__(
         self,

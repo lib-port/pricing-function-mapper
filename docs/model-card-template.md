@@ -13,7 +13,8 @@ Each artifact renders the following information from immutable run metadata:
 - promotion gate state and all warnings;
 - governance and regulatory limitations.
 
-Product owners should append ownership, approval dates, training-data lawful
-basis, jurisdiction, monitoring thresholds, incident contacts, and retirement
-date without deleting generated limitations.
-
+The rendered card is part of the hash-protected artifact and must not be
+edited. Product owners should keep ownership, approval dates, training-data
+lawful basis, jurisdiction, monitoring thresholds, incident contacts, and
+retirement date in an external governance record tied to the artifact's run ID,
+model version, and manifest digest.

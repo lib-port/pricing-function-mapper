@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 import json
 import math
 import re
@@ -279,7 +280,13 @@ _MODEL_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}:[A-Za-z0-9][A-Za-z
 class OllamaConfig(StrictConfigModel):
     """Pinned, opt-in local acquisition-policy advisor configuration."""
 
-    endpoint: str = "http://127.0.0.1:11434"
+    endpoint: str = Field(
+        default="http://127.0.0.1:11434",
+        description=(
+            "HTTP origin using a literal IPv4 address in 127.0.0.0/8 or the literal "
+            "IPv6 loopback address ::1"
+        ),
+    )
     model: str = "granite4.1:3b"
     required_digest: str
     prompt_version: Literal["policy-advisor-v1"] = "policy-advisor-v1"
@@ -290,8 +297,12 @@ class OllamaConfig(StrictConfigModel):
     @model_validator(mode="after")
     def validate_ollama(self) -> Self:
         endpoint = urlsplit(self.endpoint)
+        try:
+            port = endpoint.port
+        except ValueError as exc:
+            raise ValueError("optimizer.ollama.endpoint must use a valid TCP port") from exc
         if (
-            endpoint.scheme not in {"http", "https"}
+            endpoint.scheme != "http"
             or not endpoint.hostname
             or endpoint.username is not None
             or endpoint.password is not None
@@ -300,9 +311,21 @@ class OllamaConfig(StrictConfigModel):
             or endpoint.path not in {"", "/"}
         ):
             raise ValueError(
-                "optimizer.ollama.endpoint must be an HTTP(S) origin without credentials, "
+                "optimizer.ollama.endpoint must be a loopback HTTP origin without credentials, "
                 "a path, query, or fragment"
             )
+        try:
+            address = ipaddress.ip_address(endpoint.hostname)
+        except ValueError as exc:
+            raise ValueError(
+                "optimizer.ollama.endpoint must use a literal loopback IP address"
+            ) from exc
+        if not address.is_loopback or (
+            isinstance(address, ipaddress.IPv6Address) and address != ipaddress.IPv6Address("::1")
+        ):
+            raise ValueError("optimizer.ollama.endpoint must use a literal loopback IP address")
+        if port is not None and port == 0:
+            raise ValueError("optimizer.ollama.endpoint port must be between 1 and 65535")
         if not _MODEL_NAME.fullmatch(self.model):
             raise ValueError("optimizer.ollama.model must be a fully tagged Ollama model name")
         if not _FULL_DIGEST.fullmatch(self.required_digest):

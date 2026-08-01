@@ -202,52 +202,171 @@ def _model_card(
     model_version: str,
     model_kind: str,
     evaluation: Mapping[str, Any],
+    selection: Mapping[str, Any],
+    provider: Mapping[str, Any],
+    dependencies: Mapping[str, str],
     warnings: Sequence[str],
 ) -> str:
+    def display(value: Any) -> str:
+        if value is None:
+            return "unavailable"
+        if isinstance(value, bool):
+            return "yes" if value else "no"
+        if isinstance(value, (Mapping, list, tuple)):
+            rendered = json.dumps(value, sort_keys=True, allow_nan=False)
+        else:
+            rendered = str(value)
+        return rendered.replace("\r", " ").replace("\n", " ").replace("|", "\\|")
+
     audit = evaluation.get("audit", {})
     metrics = audit.get("metrics", {}) if isinstance(audit, Mapping) else {}
+    bootstrap = audit.get("bootstrap_intervals", {}) if isinstance(audit, Mapping) else {}
+    risk_slices = audit.get("risk_slices", {}) if isinstance(audit, Mapping) else {}
     interval = evaluation.get("audit_interval", {})
-    warning_text = "\n".join(f"- {item}" for item in warnings) or "- None recorded."
-    return f"""# {title}
-
-Model version: `{model_version}`
-
-## Intended use
-
-Offline approximation of a trusted local comprehensive-car-insurance quote
-function within the exact domain recorded in `domain.json`. It is not an
-underwriting decision system and must not be used outside that domain.
-
-## Model
-
-- Selected family: `{model_kind}`
-- Point-model selection: lowest held-out validation MAE within the configured
-  warm single-row p95 latency ceiling.
-- Uncertainty: split-conformal interval at the coverage configured in
-  `conformal.json`; RF committee spread is not exported as uncertainty.
-
-## Independent audit
-
-- MAE: `{metrics.get("mae", "unavailable")}`
-- RMSE: `{metrics.get("rmse", "unavailable")}`
-- WAPE: `{metrics.get("wape", "unavailable")}`
-- R²: `{metrics.get("r2", "unavailable")}`
-- Interval coverage: `{interval.get("coverage", "unavailable")}`
-- Mean interval width: `{interval.get("mean_width", "unavailable")}`
-
-Full confidence bounds and risk-slice results are in `evaluation.json`.
-
-## Warnings
-
-{warning_text}
-
-## Limitations and governance
-
-The synthetic reference provider is illustrative. A production insurer must
-perform legal, actuarial, fairness, privacy, explainability, change-control,
-and human-oversight reviews. This artifact does not establish regulatory
-compliance, rate adequacy, or permission to use any listed feature.
-"""
+    conformal = evaluation.get("conformal", {})
+    design = evaluation.get("evaluation_design", {})
+    split_counts = design.get("split_counts", {}) if isinstance(design, Mapping) else {}
+    latency = evaluation.get("latency", {})
+    gates = evaluation.get("promotion_gates", {})
+    selected = selection.get("selected", {})
+    tradeoff = selection.get("monotonic_constraint_tradeoff", {})
+    safe_title = display(title)
+    lines = [
+        f"# {safe_title}",
+        "",
+        f"Model version: `{display(model_version)}`",
+        "",
+        "## Intended use",
+        "",
+        "Offline approximation of a trusted local comprehensive-car-insurance quote",
+        "function within the exact domain recorded in `domain.json`. It is not an",
+        "underwriting decision system and must not be used outside that domain.",
+        "",
+        "## Model selection",
+        "",
+        f"- Selected family: `{display(model_kind)}`",
+        f"- Selected candidate: `{display(selected.get('name'))}`",
+        f"- Selection rule: {display(selection.get('selection_rule'))}",
+        f"- Validation MAE: {display(selected.get('validation_mae'))}",
+        f"- Candidate warm single-row p95 latency (ms): "
+        f"{display(selected.get('p95_latency_ms'))}",
+        f"- Candidate met latency ceiling: {display(selected.get('latency_eligible'))}",
+        f"- Best constrained HGB validation MAE: "
+        f"{display(tradeoff.get('best_constrained_mae'))}",
+        f"- Best unconstrained HGB validation MAE: "
+        f"{display(tradeoff.get('best_unconstrained_mae'))}",
+        f"- Constrained-minus-unconstrained MAE: "
+        f"{display(tradeoff.get('mae_delta_constrained_minus_unconstrained'))}",
+        f"- Constraints improved validation accuracy: "
+        f"{display(tradeoff.get('constraint_improved_accuracy'))}",
+        f"- Tested monotonic constraints: {display(tradeoff.get('constraints'))}",
+        "",
+        "## Conformal interval",
+        "",
+        "- Method: `split_conformal_absolute_residual`",
+        f"- Nominal coverage: {display(conformal.get('nominal_coverage'))}",
+        f"- Calibration rows: {display(split_counts.get('calibration'))}",
+        f"- Radius: {display(conformal.get('radius'))}",
+        "",
+        "## Independent audit",
+        "",
+        f"- Rows: {display(audit.get('count'))}",
+    ]
+    metric_labels = (
+        ("mae", "MAE"),
+        ("rmse", "RMSE"),
+        ("wape", "WAPE"),
+        ("r2", "R²"),
+        ("p95_absolute_error", "p95 absolute error"),
+        ("max_absolute_error", "Maximum absolute error"),
+    )
+    for key, label in metric_labels:
+        lines.append(f"- {label}: {display(metrics.get(key))}")
+    lines.extend(
+        [
+            f"- Bootstrap confidence: {display(audit.get('bootstrap_confidence'))}",
+            f"- MAE bootstrap interval: "
+            f"[{display(bootstrap.get('mae', {}).get('lower'))}, "
+            f"{display(bootstrap.get('mae', {}).get('upper'))}]",
+            f"- RMSE bootstrap interval: "
+            f"[{display(bootstrap.get('rmse', {}).get('lower'))}, "
+            f"{display(bootstrap.get('rmse', {}).get('upper'))}]",
+            f"- Interval coverage: {display(interval.get('coverage'))}",
+            f"- Mean interval width: {display(interval.get('mean_width'))}",
+            f"- Median interval width: {display(interval.get('median_width'))}",
+            f"- p95 interval width: {display(interval.get('p95_width'))}",
+            "",
+            "### Predefined risk slices",
+            "",
+            "| Slice | Rows | MAE | RMSE | WAPE | R² | p95 absolute error | "
+            "Maximum absolute error |",
+            "|---|---:|---:|---:|---:|---:|---:|---:|",
+        ]
+    )
+    if isinstance(risk_slices, Mapping):
+        for name in sorted(risk_slices):
+            raw_slice = risk_slices[name]
+            slice_report = raw_slice if isinstance(raw_slice, Mapping) else {}
+            slice_metrics = slice_report.get("metrics")
+            slice_metrics = slice_metrics if isinstance(slice_metrics, Mapping) else {}
+            cells = [
+                display(name),
+                display(slice_report.get("count")),
+                *[display(slice_metrics.get(key)) for key, _label in metric_labels],
+            ]
+            lines.append("| " + " | ".join(cells) + " |")
+    lines.extend(
+        [
+            "",
+            "## Promotion gates",
+            "",
+            f"- Final warm single-row p95 latency (ms): "
+            f"{display(latency.get('warm_single_row_p95_ms'))}",
+            f"- Latency ceiling (ms): {display(latency.get('ceiling_ms'))}",
+            f"- Audit coverage passed: {display(gates.get('audit_coverage_passed'))}",
+            f"- Latency passed: {display(gates.get('latency_passed'))}",
+            f"- Advisor resource gates passed: "
+            f"{display(gates.get('advisor_resources_passed'))}",
+            f"- Promotion eligible: {display(gates.get('eligible'))}",
+            "",
+            "## Provider provenance",
+            "",
+            f"- Identity: `{display(provider.get('identity'))}`",
+            f"- Attempts: {display(provider.get('attempts'))}",
+            f"- Successes: {display(provider.get('successes'))}",
+            f"- Retryable failures: {display(provider.get('retryable_failures'))}",
+            f"- Permanent failures: {display(provider.get('permanent_failures'))}",
+            f"- Total provider latency (ms): {display(provider.get('total_latency_ms'))}",
+            "",
+            "## Runtime dependencies",
+            "",
+        ]
+    )
+    lines.extend(
+        f"- `{display(name)}`: `{display(version)}`"
+        for name, version in sorted(dependencies.items())
+    )
+    lines.extend(["", "## Warnings", ""])
+    lines.extend(f"- {display(item)}" for item in warnings)
+    if not warnings:
+        lines.append("- None recorded.")
+    lines.extend(
+        [
+            "",
+            "## Limitations and governance",
+            "",
+            "The bundled synthetic reference provider is illustrative. A production insurer",
+            "must perform legal, actuarial, fairness, privacy, explainability,",
+            "change-control, and human-oversight reviews. This artifact does not establish",
+            "regulatory compliance, rate adequacy, or permission to use any listed feature.",
+            "",
+            "Keep ownership, approvals, lawful basis, jurisdiction, monitoring thresholds,",
+            "incident contacts, and retirement information in an external governance record.",
+            "Do not edit this hash-protected artifact to add that information.",
+            "",
+        ]
+    )
+    return "\n".join(lines)
 
 
 def export_artifact(
@@ -306,17 +425,20 @@ def export_artifact(
             },
         )
         _write_json(staging / "evaluation.json", dict(evaluation_report))
+        dependencies = _dependencies()
         (staging / "model-card.md").write_text(
             _model_card(
                 title=config.artifact.model_card_title,
                 model_version=model_version,
                 model_kind=model_kind,
                 evaluation=evaluation_report,
+                selection=selection_report,
+                provider=provider_summary,
+                dependencies=dependencies,
                 warnings=warnings,
             ),
             encoding="utf-8",
         )
-        dependencies = _dependencies()
         _write_json(staging / "dependencies.json", dependencies)
         _write_json(
             staging / "provenance.json",

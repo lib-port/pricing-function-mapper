@@ -467,7 +467,11 @@ Artifacts are not portable across arbitrary sklearn versions.
    scripts/quality.sh
    scripts/smoke.sh
    python -m pip_audit . --strict
+   python -m pip_audit --skip-editable
    ```
+
+   The first audit resolves the declared runtime project. The second audits the
+   installed development toolchain while omitting the editable local project.
 
 4. Run the enforced five-seed benchmark.
 5. Retrain candidate artifacts in the new runtime.

@@ -18,6 +18,16 @@ All notable changes follow Keep a Changelog conventions.
 - Advisor output is treated as untrusted. Duplicate keys, unknown fields,
   non-finite values, invalid policies/bins/boosts, oversized replies, runtime
   drift, and model-digest mismatches fail closed before quote consumption.
+- Advisor endpoints are restricted to literal HTTP loopback addresses;
+  environment proxies and redirects are disabled to prevent diagnostic egress.
+- Development dependency floors and CI audits cover patched tooling as well as
+  declared runtime dependencies.
+
+### Changed
+
+- Generated immutable model cards now include complete selection, conformal,
+  audit, risk-slice, promotion, provider, and dependency evidence. Supplemental
+  organizational governance records remain outside the artifact.
 
 ## 1.0.0 - 2026-07-29
 

@@ -33,7 +33,11 @@ not sacrifice broad population coverage.
 This table is accepted only with `sampling.strategy = "bayesian"`. Omitting it
 uses the fixed balanced Bayesian policy and makes no Ollama requests.
 
-- `endpoint`: Ollama HTTP(S) origin, normally `http://127.0.0.1:11434`.
+- `endpoint`: an HTTP origin using a literal IPv4 loopback address in
+  `127.0.0.0/8` or the literal IPv6 loopback address `::1`; the deployment
+  example uses `http://127.0.0.1:11434`. Hostnames, HTTPS, remote addresses,
+  credentials, paths, queries, fragments, environment proxies, and redirects
+  are rejected or disabled so aggregate diagnostics cannot leave the host.
 - `model`: a fully tagged local model name; the deployment example uses
   `granite4.1:3b`.
 - `required_digest`: mandatory full lowercase `sha256:` model digest.
@@ -42,9 +46,11 @@ uses the fixed balanced Bayesian policy and makes no Ollama requests.
 - `retry_count`: retries after the first attempt; fixed to at most two.
 - `resource_mode`: currently only `cpu-only-2cpu-8gb`.
 
-At startup and resume, the mapper checks `/api/version` and `/api/tags`,
-including model name, full digest, size, and `Q4_K_M` quantization. A runtime or
-model change fails closed. The advisor selects from five code-owned policies:
+The supplied Compose deployment pins the Ollama image digest. At startup, the
+mapper records `/api/version` and checks `/api/tags`, including model name, full
+digest, size, and `Q4_K_M` quantization. Resume requires the same recorded
+runtime and model metadata, so a mid-run change fails closed. The advisor
+selects from five code-owned policies:
 
 | Policy | Uncertainty | Residual | LHS exploration |
 |---|---:|---:|---:|

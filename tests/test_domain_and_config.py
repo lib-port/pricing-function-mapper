@@ -158,6 +158,7 @@ def test_generated_config_schema_forbids_unknown_settings() -> None:
     assert "mapping_budget" in serialized
     assert "max_p95_latency_ms" in serialized
     assert "required_digest" in serialized
+    assert "literal IPv4 address in 127.0.0.0/8" in serialized
 
 
 def test_ollama_optimizer_is_opt_in_pinned_and_fingerprinted() -> None:
@@ -177,3 +178,40 @@ def test_ollama_optimizer_is_opt_in_pinned_and_fingerprinted() -> None:
         OllamaConfig(required_digest=digest, endpoint="http://user:pass@localhost/path")
     with pytest.raises(ValidationError, match="60"):
         OllamaConfig(required_digest=digest, timeout_seconds=61.0)
+
+
+@pytest.mark.parametrize(
+    "endpoint",
+    [
+        "http://127.0.0.1",
+        "http://127.255.255.254:11434",
+        "http://[::1]",
+        "http://[::1]:11434/",
+    ],
+)
+def test_ollama_endpoint_accepts_literal_loopback_http(endpoint: str) -> None:
+    digest = "sha256:" + "a" * 64
+    assert OllamaConfig(required_digest=digest, endpoint=endpoint).endpoint == endpoint
+
+
+@pytest.mark.parametrize(
+    "endpoint",
+    [
+        "https://127.0.0.1:11434",
+        "http://localhost:11434",
+        "http://example.com:11434",
+        "http://192.0.2.1:11434",
+        "http://[::2]:11434",
+        "http://127.0.0.1:0",
+        "http://127.0.0.1:65536",
+        "http://127.0.0.1:not-a-port",
+        "http://user:pass@127.0.0.1:11434",
+        "http://127.0.0.1:11434/api",
+        "http://127.0.0.1:11434?query=yes",
+        "http://127.0.0.1:11434#fragment",
+    ],
+)
+def test_ollama_endpoint_rejects_nonlocal_or_ambiguous_origins(endpoint: str) -> None:
+    digest = "sha256:" + "a" * 64
+    with pytest.raises(ValidationError, match=r"endpoint|port"):
+        OllamaConfig(required_digest=digest, endpoint=endpoint)

@@ -53,10 +53,12 @@ install the exact version in `dependencies.json` or retrain.
 ## Ollama model verification failed
 
 Hybrid runs check the local model before any provider calls. Confirm the
-container is reachable only at `127.0.0.1:11434`, then rerun
+container is reachable at the configured literal loopback address (normally
+`127.0.0.1:11434`), then rerun
 `./scripts/provision-ollama.sh`. Do not shorten or update the configured digest.
 A missing model, wrong `Q4_K_M` quantization, changed Ollama version on resume,
-or digest mismatch requires correction before the same run can continue.
+digest mismatch, remote/hostname endpoint, or redirect response requires
+correction before the same run can continue.
 
 ## Advisor failed closed
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import json
 import urllib.error
+import urllib.request
 from email.message import Message
 from typing import Any
 
@@ -61,7 +62,8 @@ def test_urllib_transport_bounds_content_type_and_failures(monkeypatch: Any) -> 
     transport = UrllibAdvisorTransport("http://127.0.0.1:11434")
 
     monkeypatch.setattr(
-        "pricing_mapper.advisor.urllib.request.urlopen",
+        transport._opener,
+        "open",
         lambda *_args, **_kwargs: FakeHTTPResponse(b'{"ok":true}'),
     )
     assert (
@@ -75,7 +77,8 @@ def test_urllib_transport_bounds_content_type_and_failures(monkeypatch: Any) -> 
     )
     for response in responses:
         monkeypatch.setattr(
-            "pricing_mapper.advisor.urllib.request.urlopen",
+            transport._opener,
+            "open",
             lambda *_args, _response=response, **_kwargs: _response,
         )
         with pytest.raises(AdvisorValidationError):
@@ -91,9 +94,38 @@ def test_urllib_transport_bounds_content_type_and_failures(monkeypatch: Any) -> 
         def fail(*_args: Any, _error: Exception = error, **_kwargs: Any) -> Any:
             raise _error
 
-        monkeypatch.setattr("pricing_mapper.advisor.urllib.request.urlopen", fail)
+        monkeypatch.setattr(transport._opener, "open", fail)
         with pytest.raises(AdvisorError):
             transport.request("GET", "/api/version", None, timeout=1.0, max_bytes=100)
+
+
+def test_urllib_transport_disables_redirects(monkeypatch: Any) -> None:
+    transport = UrllibAdvisorTransport("http://127.0.0.1:11434")
+    assert transport._proxy_handler.proxies == {}
+    redirects = [
+        handler
+        for handler in transport._opener.handlers
+        if isinstance(handler, urllib.request.HTTPRedirectHandler)
+    ]
+    assert len(redirects) == 1
+    assert redirects[0].redirect_request(None, None, None, None, None, None) is None
+
+    calls: list[str] = []
+
+    def redirect_error(request: Any, **_kwargs: Any) -> Any:
+        calls.append(request.full_url)
+        raise urllib.error.HTTPError(
+            request.full_url,
+            302,
+            "redirect forbidden",
+            {"Location": "https://example.com/collect"},
+            None,
+        )
+
+    monkeypatch.setattr(transport._opener, "open", redirect_error)
+    with pytest.raises(AdvisorError):
+        transport.request("GET", "/api/version", None, timeout=1.0, max_bytes=100)
+    assert calls == ["http://127.0.0.1:11434/api/version"]
 
 
 class ObjectTransport(FakeTransport):

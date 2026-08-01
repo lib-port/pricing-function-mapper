@@ -39,7 +39,16 @@ for model artifacts.
 7. Run `scripts/smoke.sh`; it creates an isolated environment, installs the
    wheel, validates config, maps, validates the artifact, predicts, and
    recomputes audit metrics.
-8. Review dependency audit findings and document any accepted risk.
+8. Require both dependency audits to report no known vulnerabilities:
+
+   ```bash
+   python -m pip_audit . --strict
+   python -m pip_audit --skip-editable
+   ```
+
+   The first command audits the declared runtime project; the second audits the
+   installed release/development toolchain while omitting the editable local
+   package.
 9. Tag `vX.Y.Z`. The release workflow rebuilds and verifies distributions.
 10. Publish with trusted publishing only after the tag workflow passes. Never
     upload a locally modified artifact.

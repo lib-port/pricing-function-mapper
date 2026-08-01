@@ -264,6 +264,7 @@
       "properties": {
         "endpoint": {
           "default": "http://127.0.0.1:11434",
+          "description": "HTTP origin using a literal IPv4 address in 127.0.0.0/8 or the literal IPv6 loopback address ::1",
           "title": "Endpoint",
           "type": "string"
         },

@@ -18,6 +18,7 @@ jobs:
         with:
           python-version: "3.13"
           cache: pip
+      - run: python -m pip install --upgrade pip
       - run: python -m pip install -e '.[dev]'
       - run: >-
           pricing-mapper benchmark
@@ -32,4 +33,3 @@ jobs:
           path: |
             benchmark-results.json
             benchmark-results.csv
-

@@ -28,6 +28,8 @@ directories and never loads pickle.
 - An experimental Bayesian strategy keeps Gaussian-process scoring local. Its
   opt-in, pinned Ollama advisor may choose only a finite acquisition policy from
   aggregate diagnostics; it never receives raw premiums or individual rows.
+  The advisor transport permits only literal IPv4 or IPv6 loopback addresses,
+  ignores environment proxies, and refuses redirects.
 - Artifacts use `skops`, JSON/TOML metadata, SHA-256 hashes, an exclusive run
   lock, and atomic staging-directory rename. v0 pickle/state files are rejected.
 
@@ -62,6 +64,7 @@ python -m pip install .
 For development:
 
 ```bash
+python -m pip install --upgrade pip
 python -m pip install -e '.[dev]'
 pre-commit install
 ```
@@ -269,8 +272,9 @@ scripts/smoke.sh
 ```
 
 The CI matrix covers Python 3.11–3.13, Ruff, Black, strict mypy, branch
-coverage, wheel/sdist builds, installed-wheel CLI smoke tests, dependency
-audit, schema freshness, and artifact validation. A scheduled five-seed
+coverage, wheel/sdist builds, installed-wheel CLI smoke tests, runtime and
+development-environment dependency audits, schema freshness, and artifact
+validation. A scheduled five-seed
 benchmark compares active acquisition with equal-budget LHS and random
 sampling and enforces accuracy, conformal coverage, per-run latency, and
 latency-regression gates.

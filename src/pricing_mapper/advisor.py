@@ -590,6 +590,11 @@ class AdvisorTransport(Protocol):
 class UrllibAdvisorTransport:
     def __init__(self, endpoint: str) -> None:
         self.endpoint = endpoint.rstrip("/")
+        self._proxy_handler = urllib.request.ProxyHandler({})
+        self._opener = urllib.request.build_opener(
+            self._proxy_handler,
+            _NoRedirectHandler(),
+        )
 
     def request(
         self,
@@ -600,14 +605,14 @@ class UrllibAdvisorTransport:
         timeout: float,
         max_bytes: int,
     ) -> bytes:
-        request = urllib.request.Request(  # noqa: S310 - endpoint is validated HTTP(S)
+        request = urllib.request.Request(  # noqa: S310 - validated literal loopback HTTP origin
             f"{self.endpoint}{path}",
             data=payload,
             method=method,
             headers={"Accept": "application/json", "Content-Type": "application/json"},
         )
         try:
-            with urllib.request.urlopen(request, timeout=timeout) as response:  # noqa: S310
+            with self._opener.open(request, timeout=timeout) as response:
                 content_type = response.headers.get_content_type()
                 length = response.headers.get("Content-Length")
                 if length is not None and int(length) > max_bytes:
@@ -626,6 +631,13 @@ class UrllibAdvisorTransport:
         if len(body) > max_bytes:
             raise AdvisorValidationError("advisor response exceeds its size limit")
         return body
+
+
+class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Prevent a loopback advisor from redirecting a request off-host."""
+
+    def redirect_request(self, *args: Any, **kwargs: Any) -> None:
+        return None
 
 
 class PolicyAdvisor(Protocol):
