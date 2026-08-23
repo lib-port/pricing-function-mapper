@@ -5,7 +5,7 @@ on:
     workflows:
       - Scheduled benchmark
       - CI
-      - Mirror to GitLab
+      - Mirror main to GitLab
       - Release verification
     types:
       - completed
@@ -23,7 +23,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - name: Delete all completed workflow runs
+      - name: Delete older completed workflow runs
         env:
           GH_REPO: ${{ github.repository }}
           GH_TOKEN: ${{ github.token }}
@@ -31,16 +31,37 @@ jobs:
         run: |
           set -euo pipefail
 
-          mapfile -t completed_run_ids < <(
+          current_workflow_id="$(
+            gh api \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              "repos/${GH_REPO}/actions/runs/${GITHUB_RUN_ID}" \
+              --jq '.workflow_id'
+          )"
+
+          completed_runs="$(
             gh api --paginate \
               -H "X-GitHub-Api-Version: 2022-11-28" \
               "repos/${GH_REPO}/actions/runs?status=completed&per_page=100" \
-              --jq '.workflow_runs[].id'
-          )
+              --jq '.workflow_runs[] | [.created_at, .id, .workflow_id] | @tsv' |
+              sort --reverse
+          )"
 
-          for run_id in "${completed_run_ids[@]}"; do
+          declare -A retained_workflow_ids=()
+          retained_workflow_ids["$current_workflow_id"]=1
+
+          while IFS=$'\t' read -r _created_at run_id workflow_id; do
+            if [[ -z "$workflow_id" || -z "$run_id" ]]; then
+              continue
+            fi
+
+            if [[ -z "${retained_workflow_ids[$workflow_id]:-}" ]]; then
+              retained_workflow_ids["$workflow_id"]=1
+              echo "Keeping latest completed run ${run_id} for workflow ${workflow_id}"
+              continue
+            fi
+
             echo "Deleting completed workflow run ${run_id}"
             gh api --method DELETE \
               -H "X-GitHub-Api-Version: 2022-11-28" \
               "repos/${GH_REPO}/actions/runs/${run_id}"
-          done
+          done <<< "$completed_runs"

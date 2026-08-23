@@ -1,0 +1,77 @@
+name: Mirror main to GitLab
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mirror-gitlab-main
+  cancel-in-progress: true
+
+jobs:
+  mirror:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Synchronize main with GitLab
+        env:
+          GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}
+          GITLAB_REPOSITORY: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ -z "$GITLAB_TOKEN" ]]; then
+            echo "::error::The GITLAB_TOKEN repository secret is not configured."
+            exit 1
+          fi
+
+          gitlab_url="https://gitlab.com/${GITLAB_REPOSITORY}.git"
+          source_ref="refs/remotes/origin/main"
+          target_ref="refs/heads/main"
+          auth_header="$(printf 'oauth2:%s' "$GITLAB_TOKEN" | base64 -w 0)"
+          echo "::add-mask::$auth_header"
+
+          git fetch --no-tags --force origin \
+            "+refs/heads/main:${source_ref}"
+          source_sha="$(git rev-parse "$source_ref")"
+          target_sha="$(
+            git -c http.extraHeader="Authorization: Basic $auth_header" \
+              ls-remote "$gitlab_url" "$target_ref" |
+              awk 'NR == 1 { print $1 }'
+          )"
+
+          if [[ "$source_sha" == "$target_sha" ]]; then
+            echo "GitLab main is already synchronized at $source_sha."
+            exit 0
+          fi
+
+          git -c http.extraHeader="Authorization: Basic $auth_header" \
+            push \
+            "--force-with-lease=${target_ref}:${target_sha}" \
+            "$gitlab_url" \
+            "${source_ref}:${target_ref}"
+
+          mirrored_sha="$(
+            git -c http.extraHeader="Authorization: Basic $auth_header" \
+              ls-remote "$gitlab_url" "$target_ref" |
+              awk 'NR == 1 { print $1 }'
+          )"
+
+          if [[ "$mirrored_sha" != "$source_sha" ]]; then
+            echo "::error::GitLab main is at ${mirrored_sha:-<missing>}; expected $source_sha."
+            exit 1
+          fi
+
+          echo "GitLab main is synchronized at $source_sha."
