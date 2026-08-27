@@ -26,29 +26,40 @@ jobs:
 
       - name: Synchronize main with GitLab
         env:
-          GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}
+          GITLAB_SSH_PRIVATE_KEY: ${{ secrets.GITLAB_MIRROR_SSH_KEY }}
           GITLAB_REPOSITORY: ${{ github.repository }}
         shell: bash
         run: |
           set -euo pipefail
 
-          if [[ -z "$GITLAB_TOKEN" ]]; then
-            echo "::error::The GITLAB_TOKEN repository secret is not configured."
+          if [[ -z "$GITLAB_SSH_PRIVATE_KEY" ]]; then
+            echo "::error::The GITLAB_MIRROR_SSH_KEY repository secret is not configured."
             exit 1
           fi
 
-          gitlab_url="https://gitlab.com/${GITLAB_REPOSITORY}.git"
+          ssh_directory="$(mktemp -d)"
+          private_key_file="${ssh_directory}/id_ed25519"
+          known_hosts_file="${ssh_directory}/known_hosts"
+          trap 'rm -rf "$ssh_directory"' EXIT
+
+          printf '%s\n' "$GITLAB_SSH_PRIVATE_KEY" > "$private_key_file"
+          chmod 600 "$private_key_file"
+          printf '%s\n' \
+            'gitlab.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAfuCHKVTjquxvt6CM6tdG4SLp1Btn/nOeHHE5UOzRdf' \
+            > "$known_hosts_file"
+          chmod 600 "$known_hosts_file"
+          gitlab_ssh_command="ssh -i $private_key_file -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=$known_hosts_file"
+
+          gitlab_url="git@gitlab.com:${GITLAB_REPOSITORY}.git"
           source_ref="refs/remotes/origin/main"
           target_ref="refs/heads/main"
-          auth_header="$(printf 'oauth2:%s' "$GITLAB_TOKEN" | base64 -w 0)"
-          echo "::add-mask::$auth_header"
 
           git fetch --no-tags --force origin \
             "+refs/heads/main:${source_ref}"
           source_sha="$(git rev-parse "$source_ref")"
           target_sha="$(
-            git -c http.extraHeader="Authorization: Basic $auth_header" \
-              ls-remote "$gitlab_url" "$target_ref" |
+            GIT_SSH_COMMAND="$gitlab_ssh_command" \
+              git ls-remote "$gitlab_url" "$target_ref" |
               awk 'NR == 1 { print $1 }'
           )"
 
@@ -57,15 +68,15 @@ jobs:
             exit 0
           fi
 
-          git -c http.extraHeader="Authorization: Basic $auth_header" \
-            push \
+          GIT_SSH_COMMAND="$gitlab_ssh_command" \
+            git push \
             "--force-with-lease=${target_ref}:${target_sha}" \
             "$gitlab_url" \
             "${source_ref}:${target_ref}"
 
           mirrored_sha="$(
-            git -c http.extraHeader="Authorization: Basic $auth_header" \
-              ls-remote "$gitlab_url" "$target_ref" |
+            GIT_SSH_COMMAND="$gitlab_ssh_command" \
+              git ls-remote "$gitlab_url" "$target_ref" |
               awk 'NR == 1 { print $1 }'
           )"
 
